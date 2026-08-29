@@ -2,3 +2,9 @@ node_modules/
 dist/
 *.log
 .DS_Store
+
+# per-machine Claude Code settings
+.claude/settings.local.json
+
+# source SFX pack (only client/public/sfx/ is loaded by the app)
+Assets/

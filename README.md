@@ -149,5 +149,8 @@ everyone in the room, so anything team-private has to travel on its own per-sock
 
 ## Credits
 
-Sound effects: **JDSherbert — Tabletop Games SFX Pack**, in `Assets/` (source files;
-`client/public/sfx/` holds the renamed ogg/mp3 copies the app actually loads).
+Sound effects: **JDSherbert — Tabletop Games SFX Pack**. `client/public/sfx/` holds the
+renamed ogg/mp3 copies the app loads; the full source pack (`Assets/`, all formats) is kept
+out of the repository. See `NOTICE.md` for the attribution terms.
+
+The code is MIT licensed — see `LICENSE`. That license does not extend to the audio.

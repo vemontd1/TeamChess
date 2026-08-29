@@ -8,6 +8,9 @@
     "server",
     "client"
   ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "concurrently -n server,client -c yellow,cyan \"npm:dev -w server\" \"npm:dev -w client\"",
     "build": "npm run build -w client",
