@@ -1,0 +1,58 @@
+import type { Chess } from 'chess.js';
+
+export type MoveStyle = 'random' | 'greedy';
+
+export interface PickedMove { from: string; to: string; promotion?: string; }
+
+const VALUE: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+
+export function pieceValue(type: string): number {
+  return VALUE[type.toLowerCase()] ?? 0;
+}
+
+interface VerboseMove {
+  from: string; to: string; promotion?: string;
+  captured?: string; san: string; flags: string;
+}
+
+/**
+ * Choose a legal move.
+ *
+ * 'random' is a uniform draw over legal moves -- this is what a blown clock plays,
+ * so a timeout stays genuinely arbitrary and nobody can farm the timer for a good move.
+ *
+ * 'greedy' is a one-ply material grab used by bot seats: take the most valuable hanging
+ * piece, otherwise promote, otherwise check, otherwise move at random. Deliberately weak;
+ * it exists to keep a rotation flowing, not to be an opponent.
+ */
+export function pickMove(chess: Chess, style: MoveStyle): PickedMove | null {
+  const moves = chess.moves({ verbose: true }) as unknown as VerboseMove[];
+  if (moves.length === 0) return null;
+
+  const take = (m: VerboseMove): PickedMove => ({
+    from: m.from, to: m.to, promotion: m.promotion,
+  });
+
+  if (style === 'random') {
+    return take(moves[Math.floor(Math.random() * moves.length)]);
+  }
+
+  let best: VerboseMove[] = [];
+  let bestScore = -Infinity;
+  for (const m of moves) {
+    let score = 0;
+    if (m.captured) score += pieceValue(m.captured) * 10;
+    if (m.promotion) score += pieceValue(m.promotion) * 8;
+    if (m.san.includes('#')) score += 1000;
+    else if (m.san.includes('+')) score += 2;
+    score += Math.random(); // break ties so the bot is not deterministic
+    if (score > bestScore) { bestScore = score; best = [m]; }
+    else if (score === bestScore) best.push(m);
+  }
+  return take(best[Math.floor(Math.random() * best.length)]);
+}
+
+/** Staged think time so a bot move is watchable rather than instantaneous. */
+export function botThinkMs(): number {
+  return 600 + Math.floor(Math.random() * 800);
+}

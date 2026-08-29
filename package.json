@@ -1,0 +1,21 @@
+{
+  "name": "bolotnoye-logovo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Team chess with rotating control and a per-move clock.",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c yellow,cyan \"npm:dev -w server\" \"npm:dev -w client\"",
+    "build": "npm run build -w client",
+    "start": "npm run start -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
+    "test": "node test/integration.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

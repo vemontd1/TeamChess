@@ -1,0 +1,207 @@
+/* ============================================================
+   "Your move" announcement + fire canvas
+   ============================================================ */
+
+.turn-alert {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 620ms var(--ease-out), visibility 0s linear 620ms;
+}
+
+.turn-alert.show {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 260ms var(--ease-out), visibility 0s;
+}
+
+/* Amber bloom pressed in from the screen edges. An inset shadow does this in one
+   layer and stays perfectly crisp at any viewport size, unlike a gradient image. */
+.turn-vignette {
+  position: absolute;
+  inset: 0;
+  box-shadow:
+    inset 0 0 90px 6px rgba(232, 176, 75, 0.30),
+    inset 0 0 240px 30px rgba(232, 176, 75, 0.16),
+    inset 0 0 400px 80px rgba(184, 120, 40, 0.10);
+}
+
+.turn-alert.show .turn-vignette {
+  animation: turn-breathe 1.9s var(--ease-out);
+}
+
+@keyframes turn-breathe {
+  0%   { opacity: 0; transform: scale(1.04); }
+  16%  { opacity: 1; transform: scale(1); }
+  62%  { opacity: 0.85; }
+  100% { opacity: 0.5; }
+}
+
+/* The title floats over the board, whose light squares are near-white, so amber text
+   alone loses contrast. A soft dark scrim rides behind it -- wide and very diffuse, so
+   it darkens the letters' ground without reading as a box. */
+.turn-title::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 620px;
+  height: 200px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(ellipse at center,
+    rgba(8, 7, 6, 0.82) 0%, rgba(8, 7, 6, 0.55) 38%, transparent 72%);
+  z-index: -1;
+  pointer-events: none;
+}
+
+.turn-title {
+  position: absolute;
+  top: 19%;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.turn-kicker {
+  font-family: var(--font-display);
+  font-size: 42px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #FFDC96;
+  text-shadow:
+    0 0 26px var(--accent-glow),
+    0 0 64px rgba(232, 176, 75, 0.5),
+    0 2px 10px rgba(0, 0, 0, 0.95),
+    0 0 3px rgba(0, 0, 0, 0.9);
+}
+
+.turn-name {
+  font-size: 11.5px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.9);
+}
+
+.turn-alert.show .turn-title {
+  animation: turn-rise 1.9s var(--ease-out);
+}
+
+@keyframes turn-rise {
+  0%   { opacity: 0; transform: translateX(-50%) translateY(16px) scale(0.94); }
+  14%  { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  70%  { opacity: 1; }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+}
+
+/* Reduced motion: the message still arrives, it just does not move. */
+.turn-alert.reduced .turn-vignette,
+.turn-alert.reduced .turn-title { animation: none; }
+.turn-alert.reduced .turn-vignette { opacity: 0.8; }
+
+/* ---- board pulse ---- */
+
+.board-turn-pulse .board-frame {
+  animation: board-pulse 1.4s var(--ease-out);
+}
+
+@keyframes board-pulse {
+  0% {
+    box-shadow:
+      0 0 0 1px var(--panel-edge-strong), 0 0 0 8px #14120F,
+      0 0 0 9px rgba(232, 176, 75, 0.28),
+      0 0 42px rgba(232, 176, 75, 0.14),
+      0 28px 70px rgba(0, 0, 0, 0.7);
+  }
+  22% {
+    box-shadow:
+      0 0 0 1px rgba(255, 214, 128, 0.9), 0 0 0 8px #14120F,
+      0 0 0 11px rgba(232, 176, 75, 0.7),
+      0 0 70px rgba(232, 176, 75, 0.5),
+      0 28px 70px rgba(0, 0, 0, 0.7);
+  }
+  60% {
+    box-shadow:
+      0 0 0 1px rgba(255, 214, 128, 0.5), 0 0 0 8px #14120F,
+      0 0 0 10px rgba(232, 176, 75, 0.45),
+      0 0 54px rgba(232, 176, 75, 0.28),
+      0 28px 70px rgba(0, 0, 0, 0.7);
+  }
+  100% {
+    box-shadow:
+      0 0 0 1px var(--panel-edge-strong), 0 0 0 8px #14120F,
+      0 0 0 9px rgba(232, 176, 75, 0.28),
+      0 0 42px rgba(232, 176, 75, 0.14),
+      0 28px 70px rgba(0, 0, 0, 0.7);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board-turn-pulse .board-frame { animation: none; }
+}
+
+/* ---- fire canvas ----------------------------------------------------------
+   Above the SVG, and larger than the ring: flames rise well outside the stroke
+   radius, and drawing beneath a 7px opaque stroke hid the hottest part of the
+   flame entirely. `inset` is set inline from the pad the FireRing was built with. */
+
+.fire-canvas {
+  position: absolute;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 420ms var(--ease-out);
+  pointer-events: none;
+}
+
+/* The canvas is intentionally wider than the ring so flames are not cut off at the
+   stroke radius -- but .panel clips its children to keep its rounded corners clean,
+   which sheared ~28px off every side of the fire. The timer panel opts out; its own
+   corners have nothing to clip because the fire is the only thing that overflows. */
+.panel-fire { overflow: visible; }
+.panel-fire .panel-head { border-radius: var(--radius) var(--radius) 0 0; }
+
+/* A soft heat halo behind the whole ring, rising with urgency. */
+.timer-ring::after {
+  content: '';
+  position: absolute;
+  inset: -18%;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(circle,
+    rgba(232, 176, 75, 0.16) 0%,
+    rgba(232, 176, 75, 0.06) 42%,
+    transparent 68%);
+  opacity: 0;
+  transition: opacity 600ms var(--ease-out);
+}
+.timer-ring.lit::after { opacity: 1; }
+.timer-ring.warn::after {
+  opacity: 1;
+  background: radial-gradient(circle,
+    rgba(240, 140, 50, 0.24) 0%, rgba(226, 92, 28, 0.09) 45%, transparent 70%);
+}
+.timer-ring.urgent::after {
+  opacity: 1;
+  background: radial-gradient(circle,
+    rgba(226, 70, 30, 0.34) 0%, rgba(200, 50, 20, 0.13) 45%, transparent 72%);
+  animation: heat-throb 700ms var(--ease-in-out) infinite;
+}
+
+@keyframes heat-throb {
+  0%, 100% { transform: scale(1);    opacity: 0.85; }
+  50%      { transform: scale(1.06); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timer-ring.urgent::after { animation: none; }
+}

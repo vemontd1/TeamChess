@@ -1,0 +1,311 @@
+/* ============================================================
+   Board, pieces, markers
+   ============================================================ */
+
+.board {
+  --sq: calc(var(--board-size) / 8);
+  width: var(--board-size);
+  height: var(--board-size);
+  flex: 0 0 auto;
+}
+
+.board-frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(232, 176, 75, 0.18),
+    0 0 0 8px #14120F,
+    0 0 0 9px rgba(232, 176, 75, 0.10),
+    0 28px 70px rgba(0, 0, 0, 0.7);
+  transition: box-shadow var(--dur-ui) var(--ease-out);
+}
+
+/* The board only glows while this browser may actually move. */
+.board-live .board-frame {
+  box-shadow:
+    0 0 0 1px var(--panel-edge-strong),
+    0 0 0 8px #14120F,
+    0 0 0 9px rgba(232, 176, 75, 0.28),
+    0 0 42px rgba(232, 176, 75, 0.14),
+    0 28px 70px rgba(0, 0, 0, 0.7);
+}
+
+.board-squares {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  width: 100%;
+  height: 100%;
+}
+
+.sq { position: relative; }
+.sq-light { background: var(--sq-light); }
+.sq-dark  { background: var(--sq-dark); }
+
+/* A faint warm gradient across the whole board so it reads as a lit object. */
+.board-squares::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(150deg, rgba(255, 220, 160, 0.05), transparent 45%,
+              rgba(0, 0, 0, 0.16));
+}
+
+.coord {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: calc(var(--sq) * 0.17);
+  font-weight: 600;
+  opacity: 0.5;
+  pointer-events: none;
+  user-select: none;
+}
+.coord-rank { top: 4%; left: 6%; }
+.coord-file { bottom: 2%; right: 7%; }
+.sq-light .coord { color: #6B5A42; }
+.sq-dark  .coord { color: #C9BCA6; }
+
+/* ---- layers ---- */
+
+.board-markers,
+.board-pieces {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.mk, .pc {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 12.5%;
+  height: 12.5%;
+  will-change: transform;
+}
+
+/* ---- markers ---- */
+
+.mk-last {
+  background: var(--accent);
+  opacity: 0.34;
+  box-shadow: inset 0 0 0 2px rgba(232, 176, 75, 0.45);
+}
+
+.mk-selected {
+  box-shadow: inset 0 0 0 3px var(--accent);
+  background: var(--accent-wash);
+}
+
+.mk-move::after,
+.mk-capture::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  animation: mk-pop 200ms var(--ease-out) backwards;
+}
+
+/* empty target: a dot. capture target: a ring around the piece. */
+.mk-move::after {
+  width: 28%;
+  height: 28%;
+  border-radius: 50%;
+  background: rgba(232, 176, 75, 0.55);
+  box-shadow: 0 0 10px rgba(232, 176, 75, 0.35);
+}
+
+.mk-capture::after {
+  width: 88%;
+  height: 88%;
+  border-radius: 50%;
+  border: 3px solid rgba(232, 176, 75, 0.6);
+  box-shadow: 0 0 14px rgba(232, 176, 75, 0.3),
+              inset 0 0 14px rgba(232, 176, 75, 0.18);
+}
+
+.mk-hover::after {
+  background: rgba(232, 176, 75, 0.85);
+  border-color: rgba(232, 176, 75, 0.95);
+  transform: scale(1.18);
+}
+
+@keyframes mk-pop {
+  from { opacity: 0; transform: scale(0.3); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Two hard pulses then a steady ember, so check announces itself once and
+   then stops competing with the clock for attention.
+
+   The pulse lives on ::before rather than on the marker itself: every marker is placed by
+   an inline `transform: translate(...)`, and an animation that sets `transform` outranks
+   inline style -- so animating the element scaled it in the corner of the board for the
+   whole 1.8s and only then snapped it onto the king. */
+.mk-check {
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--danger-glow) 0%, transparent 68%);
+  opacity: 0.62;
+}
+
+.mk-check::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--danger-glow) 0%, transparent 68%);
+  opacity: 0;
+  animation: check-pulse 900ms var(--ease-out) 2;
+}
+
+/* Red alone was carrying the whole message, which is no message at all to a red-blind
+   player against a dark square. The dashed ring says it by shape as well. */
+.mk-check::after {
+  content: '';
+  position: absolute;
+  inset: 11%;
+  border-radius: 50%;
+  border: 2.5px dashed rgba(255, 214, 202, 0.9);
+  filter: drop-shadow(0 0 5px rgba(0, 0, 0, 0.7));
+}
+
+@keyframes check-pulse {
+  0%   { opacity: 0.95; transform: scale(1.2); }
+  100% { opacity: 0;    transform: scale(1); }
+}
+
+/* ---- team marks ---- */
+
+/* A teammate's suggestion. Deliberately violet and dashed: nothing the rules produce is
+   either, so a mark can never be mistaken for a legal-move dot or a check. */
+.mk-ghost {
+  border-radius: 10%;
+  background: rgba(122, 92, 200, 0.15);
+  box-shadow: inset 0 0 0 2.5px rgba(164, 145, 220, 0.7),
+              inset 0 0 16px rgba(122, 92, 200, 0.28);
+  animation: ghost-in 240ms var(--ease-out);
+}
+
+.mk-ghost-own {
+  background: rgba(122, 92, 200, 0.2);
+  box-shadow: inset 0 0 0 2.5px rgba(198, 180, 255, 0.95),
+              inset 0 0 18px rgba(122, 92, 200, 0.34);
+}
+
+.mk-ghost-tag {
+  position: absolute;
+  top: 3%;
+  right: 6%;
+  font-family: var(--font-mono);
+  font-size: calc(var(--sq) * 0.15);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #D6C9F6;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+  pointer-events: none;
+}
+
+@keyframes ghost-in {
+  from { opacity: 0; transform-origin: center; }
+}
+
+/* ---- keyboard cursor ---- */
+
+/* Two rings, amber over near-black, so the cursor is legible on both square colours
+   without depending on which one it happens to be sitting on. */
+.mk-cursor {
+  border-radius: 6%;
+  box-shadow:
+    inset 0 0 0 3px var(--accent),
+    inset 0 0 0 5px rgba(8, 6, 4, 0.7),
+    0 0 14px rgba(232, 176, 75, 0.35);
+  animation: cursor-breathe 1.8s var(--ease-in-out) infinite;
+  z-index: 3;
+}
+
+@keyframes cursor-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.62; }
+}
+
+.board-squares:focus { outline: none; }
+.board-squares:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+/* ---- pieces ---- */
+
+.pc {
+  transition: transform var(--dur-move) var(--ease-out);
+  cursor: default;
+  z-index: 2;
+}
+
+.board-live .pc { cursor: grab; }
+.pc.no-anim { transition: none; }
+
+.pc-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  filter: drop-shadow(var(--shadow-piece));
+  transition: filter var(--dur-ui) var(--ease-out), transform var(--dur-ui) var(--ease-out);
+  pointer-events: none;
+}
+
+.pc-shadow ellipse { fill: rgba(0, 0, 0, 0.22); }
+
+/* Lifting the piece grows its contact shadow and scales it up: the two together
+   are what sell the piece as physically picked up off the board. */
+.pc-drag {
+  transition: none;
+  z-index: 30;
+  cursor: grabbing;
+}
+.pc-drag .pc-svg {
+  transform: scale(1.1);
+  filter: drop-shadow(0 14px 16px rgba(0, 0, 0, 0.6))
+          drop-shadow(0 0 14px rgba(232, 176, 75, 0.28));
+}
+
+.pc-captured {
+  animation: pc-capture 160ms var(--ease-in-out) forwards;
+  z-index: 1;
+}
+
+@keyframes pc-capture {
+  to { opacity: 0; transform-origin: center; filter: brightness(1.6); }
+}
+
+.pc-enter .pc-svg { opacity: 0; transform: scale(0.82); }
+
+/* ---- board-level events ---- */
+
+.board-flash::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  background: radial-gradient(circle at center, var(--danger-glow), transparent 72%);
+  animation: flash 460ms var(--ease-out) forwards;
+}
+
+@keyframes flash {
+  0%   { opacity: 0; }
+  22%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.board-shake { animation: shake 220ms var(--ease-in-out); }
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25%      { transform: translateX(-3px); }
+  75%      { transform: translateX(3px); }
+}

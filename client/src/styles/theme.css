@@ -1,0 +1,155 @@
+/* ============================================================
+   Obsidian & Amber — design tokens
+   ============================================================ */
+
+:root {
+  /* surfaces */
+  --bg:          #0A0A0C;
+  --bg-lift:     #101014;
+  --panel:       #16161A;
+  --panel-glass: rgba(22, 22, 26, 0.72);
+  --panel-edge:  rgba(232, 176, 75, 0.14);
+  --panel-edge-strong: rgba(232, 176, 75, 0.32);
+
+  /* accent */
+  --accent:      #E8B04B;
+  --accent-dim:  #A87F35;
+  --accent-glow: rgba(232, 176, 75, 0.42);
+  --accent-wash: rgba(232, 176, 75, 0.10);
+
+  /* board */
+  --sq-light:    #E8DCC8;
+  --sq-dark:     #3A3632;
+
+  /* semantic */
+  --danger:      #D4553F;
+  --danger-glow: rgba(212, 85, 63, 0.45);
+  --success:     #6FA86B;
+
+  /* text */
+  --text:        #EDE7DC;
+  --text-dim:    #9A9287;
+  /* was #625C54, which measured 2.7:1 on --panel -- under the 4.5:1 floor and by some
+     margin the worst offender in the palette. #8A8378 is 4.8:1 and 5.3:1 on --bg. */
+  --text-faint:  #8A8378;
+
+  /* type */
+  --font-display: 'Cormorant Garamond', 'Georgia', 'Times New Roman', serif;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+
+  /* motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-move: 180ms;
+  --dur-ui: 220ms;
+
+  /* elevation */
+  --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-piece: 0 2px 3px rgba(0, 0, 0, 0.45);
+  --shadow-lift:  0 12px 24px rgba(0, 0, 0, 0.6);
+
+  --radius: 14px;
+  --radius-sm: 9px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Layered ambience: two warm pools of light over near-black, plus a fine grain so
+   the large flat areas do not band on wide-gamut displays. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(1100px 620px at 18% -8%,  rgba(232, 176, 75, 0.10), transparent 62%),
+    radial-gradient(900px 560px at 88% 108%, rgba(122, 92, 200, 0.07), transparent 60%),
+    radial-gradient(1400px 900px at 50% 50%, rgba(255, 255, 255, 0.014), transparent 70%);
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: -50%;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.032;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation: grain 7s steps(6) infinite;
+}
+
+@keyframes grain {
+  0%   { transform: translate(0, 0); }
+  20%  { transform: translate(-3%, 2%); }
+  40%  { transform: translate(2%, -3%); }
+  60%  { transform: translate(-2%, -2%); }
+  80%  { transform: translate(3%, 1%); }
+  100% { transform: translate(0, 0); }
+}
+
+#app { position: relative; z-index: 2; }
+
+/* Text for screen readers only: live regions and the board's spoken commentary. Clipped
+   rather than hidden, because display:none and visibility:hidden are not announced. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Keyboard focus is never invisible, whatever the component. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+::selection { background: var(--accent-glow); color: #0A0A0C; }
+
+/* Scrollbars, tuned to the theme rather than left default-bright. */
+* { scrollbar-width: thin; scrollbar-color: var(--accent-dim) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(232, 176, 75, 0.22);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(232, 176, 75, 0.4); }
+
+/* Motion is decoration here, never information: everything below still reads with
+   animation switched off. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  body::after { display: none; }
+}

@@ -1,0 +1,127 @@
+export type Color = 'white' | 'black';
+export type Status = 'lobby' | 'playing' | 'finished';
+export type SeatKind = 'human' | 'bot';
+
+export interface RoomConfig {
+  teamSize: number;            // 1..5
+  skipEmptySeats: boolean;     // rotation only cycles occupied seats
+  moveTimerSec: number | null; // per-move countdown, null = off
+  allowTakeback: boolean;
+}
+
+export interface SeatStats {
+  moves: number;          // moves this seat actually played
+  autoMoves: number;      // moves forced by the clock running out
+  botMoves: number;       // moves played by a bot occupying this seat
+  thinkMsTotal: number;   // cumulative deliberation time
+  captured: number;       // material points taken
+}
+
+export interface SeatView {
+  id: number;
+  name: string | null;
+  kind: SeatKind;
+  occupied: boolean;
+  connected: boolean;
+  stats: SeatStats;
+}
+
+export interface TeamView {
+  color: Color;
+  seats: SeatView[];
+  activeSeatId: number | null;
+}
+
+export interface GameOver {
+  reason: 'checkmate' | 'stalemate' | 'threefold' | 'fifty-move' | 'insufficient' | 'draw';
+  winner: Color | 'draw' | null;
+}
+
+export interface HistoryEntry {
+  ply: number;
+  san: string;
+  color: Color;
+  seatId: number;
+  playerName: string;
+  auto: boolean;   // forced by timeout
+  bot: boolean;    // played by a bot seat
+}
+
+export interface PendingTakeback {
+  byColor: Color;       // team asking to take the move back
+  byName: string;
+  deadline: number;     // epoch ms when the request auto-declines
+}
+
+export interface RoomState {
+  id: string;
+  status: Status;
+  fen: string;
+  turn: Color;
+  white: TeamView;
+  black: TeamView;
+  activeColor: Color | null;
+  activeSeatId: number | null;
+  activePlayerName: string | null;
+  turnDeadline: number | null;
+  lastMove: { from: string; to: string } | null;
+  lastMoveAuto: boolean;
+  history: HistoryEntry[];
+  inCheck: boolean;
+  gameOver: GameOver | null;
+  spectatorCount: number;
+  pendingTakeback: PendingTakeback | null;
+  config: RoomConfig;
+}
+
+export interface Seat { color: Color; seatId: number; }
+
+export interface You {
+  token: string;
+  name: string;
+  isHost: boolean;
+  seat: Seat | null;
+}
+
+// --- socket event payloads ---
+export interface CreatePayload { name: string; config: Partial<RoomConfig>; }
+export interface JoinPayload { roomId: string; name: string; token?: string; }
+export interface SeatTakePayload { color: Color; seatId: number; }
+export interface SeatBotPayload { color: Color; seatId: number; bot: boolean; }
+export interface MovePayload { from: string; to: string; promotion?: string; }
+export interface TakebackRespondPayload { accept: boolean; }
+export interface JoinResult {
+  ok: boolean;
+  error?: string;
+  you?: You;
+  state?: RoomState;
+}
+
+// --- team coordination ---
+
+/**
+ * Chat and marks are team-scoped: a message reaches your own team only, spectators talk
+ * among themselves, and neither ever crosses to the opposing team. That is enforced on
+ * delivery rather than by filtering in the client -- otherwise the opposing team could
+ * simply read the traffic in devtools, which in a game about coordinating a team would be
+ * the whole exploit.
+ */
+export type ChatChannel = 'white' | 'black' | 'spectator';
+
+export interface ChatMessage {
+  id: number;
+  channel: ChatChannel;
+  name: string;
+  text: string;
+  at: number;
+}
+
+/** A square a teammate has flagged as interesting. Cleared whenever a ply is played. */
+export interface MarkView {
+  square: string;
+  name: string;
+  own: boolean;   // computed per recipient
+}
+
+export interface ChatSendPayload { text: string; }
+export interface MarkTogglePayload { square: string; }
