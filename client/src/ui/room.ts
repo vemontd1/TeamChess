@@ -57,17 +57,57 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   const controls = root.querySelector<HTMLElement>('#controls')!;
   const cardsHost = root.querySelector<HTMLElement>('#cards')!;
 
-  // ---- board sizing: fit the viewport without letting the board dominate wide screens.
-  // Cards mode parks a hand under the board, so the board has to give that space back or
-  // the cards fall off the bottom of the window.
-  const sizeBoard = (): void => {
-    const w = window.innerWidth;
-    const avail = w > 1180 ? Math.min(w - 640, 620) : Math.min(w - 40, 560);
-    const chrome = isCardsMode(getState()) ? 490 : 250;
-    const h = window.innerHeight - chrome;
-    boardHost.style.setProperty('--board-size', `${Math.max(280, Math.min(avail, h))}px`);
+  // ---- board sizing ------------------------------------------------------
+  //
+  // The board takes whatever the window has left after everything that shares the column
+  // with it. The height it can have is *measured* rather than guessed at with a constant:
+  // the tray, the card hand and the button row all have sizes that do not depend on the
+  // board, so reading them back is both exact and self-correcting -- adding a row under
+  // the board can never again quietly push it off the bottom of the screen.
+  //
+  // The cap is a share of the viewport rather than a fixed pixel count. A 620px ceiling
+  // is right on a laptop and absurd on a 27-inch monitor, where it left the game sitting
+  // in the middle of the display with the rest unused.
+
+  const uiScale = (): number => {
+    const v = parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--ui'));
+    return Number.isFinite(v) && v > 0 ? v : 1;
   };
+
+  const heightOf = (el: HTMLElement | null): number =>
+    el && !el.hidden ? el.getBoundingClientRect().height : 0;
+
+  const sizeBoard = (): void => {
+    const ui = uiScale();
+    const w = window.innerWidth;
+    const stacked = w <= 1180;   // the side columns drop under the board below this
+
+    // width: the page padding and, on a wide screen, both side columns and the gaps
+    const pagePad = 2 * 26 * ui;
+    const columns = stacked ? 0 : (280 + 320 + 2 * 26) * ui;
+    const availW = w - pagePad - columns - 8;
+
+    // height: everything else in the board column, measured
+    const topbar = heightOf(root.querySelector<HTMLElement>('.topbar'));
+    const siblings = heightOf(trayEl.closest('.panel'))
+      + heightOf(cardsHost) + heightOf(controls);
+    const colGaps = 16 * ui * 2;
+    const measured = window.innerHeight - topbar - siblings - colGaps - pagePad;
+    // before the first paint the measurements are zero; fall back to a sane guess
+    const availH = siblings > 0 ? measured : window.innerHeight - 260 * ui;
+
+    // Two ceilings: never more than 84% of the window height, so the board is never the
+    // only thing on screen, and a generous absolute cap that itself grows with the scale.
+    const cap = Math.min(window.innerHeight * 0.84, 1040 * ui);
+
+    const size = Math.max(300, Math.min(availW, availH, cap));
+    boardHost.style.setProperty('--board-size', `${Math.round(size)}px`);
+  };
+
   sizeBoard();
+  // measurements are only real once the column has been laid out
+  requestAnimationFrame(() => requestAnimationFrame(sizeBoard));
   window.addEventListener('resize', sizeBoard);
 
   /** Announce to screen readers what the visuals say in colour and motion. */
@@ -146,14 +186,21 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   });
 
   // Left column: both rosters, oriented so your team sits nearest you.
+  // The move list is the panel that takes the slack in the right column; the chat log
+  // does the same on the left. Both scroll, so growing them is free usefulness rather
+  // than stretched whitespace.
   const movesPanel = panel('Move history', '<div class="moves" id="moves"></div>');
+  movesPanel.classList.add('panel-grow');
   const statsPanel = panel('Player stats', '<div class="panel-body" id="stats"></div>');
   const timerPanel = document.createElement('section');
   timerPanel.className = 'panel edge sheen panel-fire';
   timerPanel.appendChild(timer.el);
 
   rosterStack.append(whitePanel.el, blackPanel.el);
-  leftCol.append(chat.el);
+  chat.el.classList.add('panel-grow');
+  // In cards mode the chat goes (a team of one has no audience) and the table takes its
+  // place, so the left column stays useful in both modes.
+  leftCol.append(chat.el, cardHand.infoEl);
   rightCol.append(timerPanel, movesPanel, statsPanel);
 
   let takebackHost: HTMLElement | null = null;
@@ -279,6 +326,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     }
 
     cardsHost.hidden = !cardsMode;
+    cardHand.infoEl.hidden = !cardsMode;
     if (isCardsMode(s)) {
       cardHand.render(s.hand, room.cards, s.you?.seat?.color ?? null);
       applyReach();

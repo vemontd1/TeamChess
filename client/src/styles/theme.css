@@ -54,7 +54,39 @@
 
   --radius: 14px;
   --radius-sm: 9px;
+
+  /*
+   * UI scale. This is a desktop game -- two rosters, a board, a clock, a move list and a
+   * chat all on screen at once -- and it was drawn at one fixed size, so on anything
+   * larger than a laptop it sat in the middle of the display with the rest of the screen
+   * unused.
+   *
+   * Every font size in the app is multiplied by this, and so are the handful of fixed
+   * component dimensions that have to keep pace with type: the timer ring, the cards, the
+   * roster rows. One variable, so the whole interface grows together instead of the board
+   * outgrowing its labels.
+   *
+   * The steps are deliberately gentle. Doubling type on a 4K display would be as wrong as
+   * leaving it at laptop size; what a bigger screen buys is mostly a bigger board, and
+   * type only has to keep up with it.
+   */
+  --ui-step: 1;
+  --ui: var(--ui-step);
 }
+
+@media (min-width: 1500px) { :root { --ui-step: 1.08; } }
+@media (min-width: 1800px) { :root { --ui-step: 1.16; } }
+@media (min-width: 2300px) { :root { --ui-step: 1.28; } }
+@media (min-width: 3000px) { :root { --ui-step: 1.45; } }
+
+/*
+ * The landing screen stops scaling sooner than the game does. It is one tall column of
+ * form controls with a fixed amount in it -- scaling it further only pushes the Create
+ * button below the fold, where the game view genuinely gains from every extra pixel.
+ * `--ui-step` is the raw value for the viewport; overriding `--ui` from it avoids the
+ * self-reference that redeclaring `--ui` in terms of itself would be.
+ */
+.home { --ui: min(var(--ui-step), 1.08); }
 
 * { box-sizing: border-box; }
 
@@ -65,7 +97,7 @@ html, body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 15px;
+  font-size: calc(15px * var(--ui));
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }

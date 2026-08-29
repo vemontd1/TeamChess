@@ -230,6 +230,33 @@ In Chess Cards this is the difference between the Wild shimmering and sitting st
 dealing in and being spent are not affected by any of it: those are how you see the hand
 change, and hiding them would not calm the interface, only make it lie.
 
+## Sizing
+
+The game is built for a desktop first: two rosters, a board, a clock, a move list and a
+chat, all on screen at once and none of them scrolling past each other.
+
+Everything scales from one variable. `--ui` in `theme.css` steps up at 1500, 1800, 2300 and
+3000 pixels wide, and every font size in the app is multiplied by it, along with the fixed
+dimensions that have to keep pace with type — the timer ring, the cards, the captured tray.
+The board is sized in JavaScript from what the window actually has left: the height of
+everything sharing its column is *measured* rather than guessed at, so adding a row under
+the board can never quietly push it off the bottom of the screen again.
+
+Above 1180px the shell is exactly one viewport tall and the side columns scroll inside
+themselves, with the move list and the chat log taking up whatever the fixed panels leave.
+The alternative — letting the tallest column push the document past the window — meant that
+on a short screen, reaching for the chat scrolled the board out of view.
+
+Below 1180px the columns stack under the board and the page scrolls normally.
+
+| | 1366×768 | 1920×1080 | 2560×1440 | 3840×2160 |
+|---|---|---|---|---|
+| `--ui` | 1.0 | 1.16 | 1.28 | 1.45 |
+| Board | 593 | 851 | 1193 | 1508 |
+
+The landing screen stops scaling at 1.08. It is one tall column of form controls with a
+fixed amount in it, so scaling it further only pushes the Create button below the fold.
+
 ## Layout
 
 ```

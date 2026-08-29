@@ -81,7 +81,17 @@ const EXIT_MS = 420;
  * middle of the hand would otherwise re-deal every card to its right.
  */
 export class CardHand {
+  /** The hand itself, which belongs under the board where the doc puts it. */
   readonly el: HTMLElement;
+  /**
+   * The table: what the opponent holds, and what both sides have spent.
+   *
+   * This lives in a side column rather than between the board and the hand. It is
+   * reference material -- read between turns, not during a move -- and a hundred pixels
+   * of it stacked under the board was costing the board a hundred pixels of size, which
+   * is the one thing on screen that cannot be read anywhere else.
+   */
+  readonly infoEl: HTMLElement;
   private handEl: HTMLElement;
   private actionsEl: HTMLElement;
   private oppEl: HTMLElement;
@@ -98,7 +108,6 @@ export class CardHand {
     this.el = document.createElement('div');
     this.el.className = 'cards-wrap';
     this.el.innerHTML = `
-      <div class="cards-opp" id="opp"></div>
       <div class="cards-note" id="note" role="status" aria-live="polite"></div>
       <div class="cards-row">
         <div class="cards-hand" id="hand" role="group" aria-label="Your cards"></div>
@@ -106,8 +115,14 @@ export class CardHand {
       </div>`;
     this.handEl = this.el.querySelector('#hand')!;
     this.actionsEl = this.el.querySelector('#actions')!;
-    this.oppEl = this.el.querySelector('#opp')!;
     this.noteEl = this.el.querySelector('#note')!;
+
+    this.infoEl = document.createElement('section');
+    this.infoEl.className = 'panel edge cards-table';
+    this.infoEl.innerHTML = `
+      <div class="panel-head"><span class="panel-title">The table</span></div>
+      <div class="cards-opp" id="opp"></div>`;
+    this.oppEl = this.infoEl.querySelector('#opp')!;
 
     this.paintMotion(motionLevel());
     this.offMotion = onMotionChange(lvl => this.paintMotion(lvl));
@@ -119,9 +134,11 @@ export class CardHand {
    * sees a card arrive or leave, not decoration on top of it.
    */
   private paintMotion(level: MotionLevel): void {
-    this.el.classList.toggle('fx-full', level === 'full');
-    this.el.classList.toggle('fx-calm', level === 'calm');
-    this.el.classList.toggle('fx-off', level === 'off');
+    for (const el of [this.el, this.infoEl]) {
+      el.classList.toggle('fx-full', level === 'full');
+      el.classList.toggle('fx-calm', level === 'calm');
+      el.classList.toggle('fx-off', level === 'off');
+    }
   }
 
   /** Long enough to cover the deal animation plus the glow that outlasts it. */
@@ -168,6 +185,7 @@ export class CardHand {
     }
 
     this.el.classList.toggle('hand-live', hand?.yourTurn === true);
+    this.infoEl.classList.toggle('hand-live', hand?.yourTurn === true);
     this.renderOpponent(cards, myColor);
     this.renderNote(hand);
     this.reconcileHand(hand, hadHand);

@@ -18,8 +18,8 @@
   flex-direction: column;
   gap: 7px;
   margin-top: 10px;
-  --card-w: 66px;
-  --card-h: 92px;
+  --card-w: calc(66px * var(--ui));
+  --card-h: calc(92px * var(--ui));
   /* Per-kind accent. Scarcer cards run hotter, so the deck's shape is legible on the
      table: ten pawns are bronze, three queens are full gold. */
   --tint: var(--text-faint);
@@ -31,18 +31,15 @@
 .cards-opp {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 7px 13px;
-  border: 1px solid var(--panel-edge);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  font-size: 12px;
+  gap: calc(7px * var(--ui));
+  padding: calc(11px * var(--ui)) calc(15px * var(--ui));
+  font-size: calc(12px * var(--ui));
   color: var(--text-dim);
 }
 
 .opp-row { display: flex; align-items: center; gap: 9px; }
 .opp-label, .spent-label {
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--ui));
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-faint);
@@ -53,7 +50,7 @@
 .opp-none { color: var(--text-faint); font-style: italic; }
 .opp-count {
   font-family: var(--font-display);
-  font-size: 15px;
+  font-size: calc(15px * var(--ui));
   color: var(--accent);
   flex: 0 0 auto;
 }
@@ -62,8 +59,8 @@
    on its own beat, so an opponent drawing is motion on their side of the table rather
    than a number quietly changing. */
 .card-back {
-  width: 13px;
-  height: 19px;
+  width: calc(13px * var(--ui));
+  height: calc(19px * var(--ui));
   border-radius: 2.5px;
   background:
     repeating-linear-gradient(45deg,
@@ -81,7 +78,7 @@
 
 .spent-row { display: flex; align-items: center; gap: 9px; min-height: 20px; }
 .spent-pip {
-  width: 17px; height: 17px;
+  width: calc(17px * var(--ui)); height: calc(17px * var(--ui));
   opacity: 0.75;
   display: inline-block;
   animation: pip-in 300ms var(--ease-out) backwards;
@@ -90,12 +87,12 @@
 .spent-pip .pc-svg { filter: none; }
 .spent-wild {
   color: var(--accent);
-  font-size: 13px;
-  line-height: 17px;
+  font-size: calc(13px * var(--ui));
+  line-height: calc(17px * var(--ui));
   text-align: center;
-  width: 17px;
+  width: calc(17px * var(--ui));
 }
-.spent-none, .spent-more { color: var(--text-faint); font-size: 11px; }
+.spent-none, .spent-more { color: var(--text-faint); font-size: calc(11px * var(--ui)); }
 .spent-mine .spent-pip { opacity: 0.5; }
 
 @keyframes pip-in {
@@ -105,7 +102,7 @@
 .cards-meta {
   display: flex;
   gap: 14px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--ui));
   color: var(--text-faint);
   letter-spacing: 0.04em;
 }
@@ -114,7 +111,7 @@
 /* ---- the line that says what the hand can do right now ---- */
 
 .cards-note {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui));
   color: var(--text-faint);
   text-align: center;
   min-height: 16px;
@@ -192,7 +189,7 @@
   position: absolute;
   top: 5px; left: 6px;
   font-family: var(--font-display);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui));
   line-height: 1;
   font-weight: 600;
   color: var(--tint);
@@ -201,9 +198,9 @@
 }
 
 .card-art {
-  width: 46px; height: 46px;
+  width: calc(46px * var(--ui)); height: calc(46px * var(--ui));
   display: block;
-  margin-bottom: 9px;   /* clear the name plate */
+  margin-bottom: calc(9px * var(--ui));   /* clear the name plate */
   transition: transform 260ms var(--ease-out);
 }
 .card-art .pc-svg {
@@ -212,8 +209,8 @@
 }
 
 .card-glyph {
-  font-size: 28px;
-  line-height: 46px;
+  font-size: calc(28px * var(--ui));
+  line-height: calc(46px * var(--ui));
   color: var(--tint);
   text-shadow: 0 0 14px var(--tint-soft);
 }
@@ -222,7 +219,7 @@
   position: absolute;
   left: 3px; right: 3px; bottom: 3px;
   padding: 3px 2px;
-  font-size: 8.5px;
+  font-size: calc(8.5px * var(--ui));
   letter-spacing: 0.1em;
   text-transform: uppercase;
   text-align: center;
@@ -272,7 +269,7 @@
   border-color: rgba(212, 85, 63, 0.55);
 }
 /* "Emergency" is twice the length of any card name and must still fit the same card. */
-.card-emergency .card-name { font-size: 7.5px; letter-spacing: 0.03em; }
+.card-emergency .card-name { font-size: calc(7.5px * var(--ui)); letter-spacing: 0.03em; }
 
 /* ---- states ---- */
 
@@ -442,15 +439,15 @@
 
 @media (max-width: 640px) {
   .cards-wrap { --card-w: 56px; --card-h: 80px; }
-  .card-art { width: 32px; height: 32px; }
-  .card-glyph { font-size: 21px; line-height: 32px; }
+  .card-art { width: 32px; height: 32px; margin-bottom: 8px; }
+  .card-glyph { font-size: calc(21px * var(--ui)); line-height: 32px; }
 }
 
 /* ---- home: the mode picker ---- */
 
 .mode-blurb {
   margin: -4px 0 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui));
   line-height: 1.5;
   color: var(--text-faint);
 }

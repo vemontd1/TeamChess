@@ -8,13 +8,29 @@
   flex-direction: column;
 }
 
+/*
+ * On a desktop the app is bound to the window rather than to the page: the shell is
+ * exactly one viewport tall and the two side columns scroll inside themselves.
+ *
+ * The alternative is what it used to do -- let the tallest column push the document past
+ * the window, so that on a 768px-high laptop a roster you were not even looking at
+ * scrolled the board out of view. A board that moves when you reach for the chat is worse
+ * than a column with its own scrollbar.
+ */
+@media (min-width: 1181px) {
+  .shell { height: 100vh; }
+  .room-layout { min-height: 0; }
+  .side-column { overflow-y: auto; overflow-x: hidden; }
+  .board-column { min-height: 0; }
+}
+
 /* ---- top bar ---- */
 
 .topbar {
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 14px 26px;
+  gap: calc(18px * var(--ui));
+  padding: calc(14px * var(--ui)) calc(26px * var(--ui));
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   background: rgba(10, 10, 12, 0.7);
   backdrop-filter: blur(18px);
@@ -28,18 +44,18 @@
   align-items: baseline;
   gap: 10px;
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: calc(20px * var(--ui));
   letter-spacing: 0.04em;
 }
 .brand b { color: var(--accent); font-weight: 600; }
-.brand span { color: var(--text-faint); font-size: 12px; letter-spacing: 0.22em;
+.brand span { color: var(--text-faint); font-size: calc(12px * var(--ui)); letter-spacing: 0.22em;
   text-transform: uppercase; font-family: var(--font-ui); }
 
 .topbar-spacer { flex: 1; }
 
 .room-code {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--ui));
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--accent);
@@ -54,26 +70,46 @@
 .room-layout {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(230px, 268px) auto minmax(250px, 300px);
-  gap: 26px;
-  padding: 26px;
-  align-items: start;
+  /* The side columns are read constantly during play -- roster, clock, move list -- so
+     they scale with the interface rather than staying laptop-sized beside a bigger board. */
+  grid-template-columns:
+    minmax(calc(230px * var(--ui)), calc(280px * var(--ui)))
+    auto
+    minmax(calc(250px * var(--ui)), calc(320px * var(--ui)));
+  gap: calc(26px * var(--ui));
+  padding: calc(26px * var(--ui));
+  /* stretch, not start: the two side columns run the full height of the window so the
+     move list and the chat log can take up whatever the fixed panels leave, instead of
+     both hugging their content and leaving a third of a desktop screen empty */
+  align-items: stretch;
   justify-content: center;
+  min-height: 0;
 }
 
 .board-column {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: calc(16px * var(--ui));
 }
 
 .side-column {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: calc(16px * var(--ui));
   min-width: 0;
+  min-height: 0;
 }
+
+/* The one panel per column that absorbs the leftover height. Everything else keeps its
+   natural size, so the clock and the rosters never stretch into odd proportions. */
+.side-column > .panel-grow {
+  flex: 1 1 auto;
+  min-height: calc(150px * var(--ui));
+  display: flex;
+  flex-direction: column;
+}
+.side-column > .panel-grow > :last-child { flex: 1 1 auto; min-height: 0; }
 
 /* ---- panels ---- */
 
@@ -106,7 +142,7 @@
 }
 
 .panel-title {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--ui));
   font-weight: 600;
   letter-spacing: 0.2em;
   text-transform: uppercase;
@@ -123,7 +159,7 @@
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: calc(13px * var(--ui));
   font-weight: 500;
   padding: 9px 16px;
   border-radius: var(--radius-sm);
@@ -176,7 +212,7 @@
 
 .btn-lg {
   padding: 14px 22px;
-  font-size: 14.5px;
+  font-size: calc(14.5px * var(--ui));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -184,7 +220,7 @@
 }
 .btn-arrow {
   transition: transform 240ms var(--ease-out);
-  font-size: 16px;
+  font-size: calc(16px * var(--ui));
 }
 .btn:hover:not(:disabled) .btn-arrow { transform: translateX(4px); }
 
@@ -192,16 +228,16 @@
 .btn-danger { border-color: rgba(212, 85, 63, 0.4); color: #E8836F; }
 .btn-danger:hover:not(:disabled) { background: rgba(212, 85, 63, 0.12); }
 
-.btn-sm { padding: 5px 10px; font-size: 11.5px; }
+.btn-sm { padding: 5px 10px; font-size: calc(11.5px * var(--ui)); }
 .btn-row { display: flex; gap: 9px; flex-wrap: wrap; }
-.btn-icon { padding: 8px 11px; font-size: 14px; line-height: 1; }
+.btn-icon { padding: 8px 11px; font-size: calc(14px * var(--ui)); line-height: 1; }
 
 /* ---- inputs ---- */
 
 .field { display: flex; flex-direction: column; gap: 6px; }
 
 .label {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--ui));
   font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -216,7 +252,7 @@
   border-radius: var(--radius-sm);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: calc(14px * var(--ui));
   padding: 10px 13px;
   transition: border-color var(--dur-ui) var(--ease-out),
               box-shadow var(--dur-ui) var(--ease-out);
@@ -243,7 +279,7 @@
   gap: 10px;
   cursor: pointer;
   user-select: none;
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--ui));
 }
 .switch input { display: none; }
 .switch-track {
@@ -272,19 +308,22 @@
 
 /* ---- home / lobby ---- */
 
+/* The home card is one tall column of controls, so its rhythm tightens as the interface
+   scales rather than growing with it -- otherwise scaling type for a big monitor is what
+   pushes the Create button below the fold on a 1080p one. */
 .home {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 48px 20px;
+  padding: clamp(20px, calc(46px / var(--ui)), 48px) 20px;
 }
 
 .home-card {
   width: 100%;
-  max-width: 468px;
+  max-width: calc(468px * var(--ui));
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: clamp(12px, calc(21px / var(--ui)), 22px);
   animation: rise 520ms var(--ease-out) backwards;
 }
 
@@ -299,7 +338,7 @@
 /* A single large glyph behind the wordmark, low-contrast, as a ground rather than
    an ornament -- it gives the title something to sit on without adding chrome. */
 .hero-mark {
-  font-size: 132px;
+  font-size: calc(132px * var(--ui));
   line-height: 0.8;
   color: var(--accent);
   opacity: 0.055;
@@ -314,7 +353,7 @@
 .home-title {
   position: relative;
   font-family: var(--font-display);
-  font-size: 50px;
+  font-size: calc(50px * min(var(--ui), 1.16));
   line-height: 1.02;
   letter-spacing: 0.005em;
 }
@@ -328,15 +367,19 @@
 .home-sub {
   position: relative;
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: calc(14px * var(--ui));
   line-height: 1.55;
-  max-width: 358px;
+  max-width: calc(358px * var(--ui));
   margin: 12px auto 0;
 }
 
 /* ---- panel internals ---- */
 
-.stack { display: flex; flex-direction: column; gap: 20px; }
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(11px, calc(19px / var(--ui)), 20px);
+}
 
 .rule {
   height: 1px;
@@ -354,7 +397,7 @@
   letter-spacing: 0.42em;
   text-transform: lowercase;
   text-align: center;
-  font-size: 17px;
+  font-size: calc(17px * var(--ui));
 }
 
 .divider {
@@ -362,7 +405,7 @@
   align-items: center;
   gap: 14px;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui));
   letter-spacing: 0.24em;
   text-transform: uppercase;
 }
@@ -394,7 +437,7 @@
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm);
   padding: 11px 18px;
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--ui));
   box-shadow: var(--shadow-lift);
   animation: toast-in 300ms var(--ease-out);
 }
@@ -424,7 +467,7 @@
 @keyframes fade { from { opacity: 0; } }
 
 .modal {
-  width: min(420px, calc(100vw - 40px));
+  width: min(calc(420px * var(--ui)), calc(100vw - 40px));
   background: var(--panel);
   border: 1px solid var(--panel-edge-strong);
   border-radius: var(--radius);
@@ -438,20 +481,20 @@
   from { opacity: 0; transform: scale(0.94) translateY(10px); }
 }
 
-.modal h2 { font-size: 27px; margin-bottom: 6px; }
-.modal p { color: var(--text-dim); font-size: 14px; margin: 0 0 20px; }
+.modal h2 { font-size: calc(27px * var(--ui)); margin-bottom: 6px; }
+.modal p { color: var(--text-dim); font-size: calc(14px * var(--ui)); margin: 0 0 20px; }
 
 /* ---- name gate: the invite-link arrival's only screen ---- */
 
 .name-gate .gate-mark {
-  font-size: 42px;
+  font-size: calc(42px * var(--ui));
   line-height: 1;
   color: var(--accent);
   margin-bottom: 12px;
   text-shadow: 0 0 26px var(--accent-glow);
 }
 .name-gate .tfield { margin-bottom: 16px; text-align: left; }
-.name-gate .tfield input { text-align: center; font-size: 16px; }
+.name-gate .tfield input { text-align: center; font-size: calc(16px * var(--ui)); }
 
 .name-gate.shake { animation: gate-shake 380ms var(--ease-out); }
 @keyframes gate-shake {
@@ -472,8 +515,11 @@
   .room-layout {
     grid-template-columns: minmax(0, 1fr);
     justify-items: center;
+    align-items: start;
   }
-  .side-column { width: min(100%, 560px); }
+  /* stacked, there is no leftover height to absorb -- the page scrolls instead */
+  .side-column > .panel-grow { flex: 0 0 auto; }
+  .side-column { width: min(100%, calc(560px * var(--ui))); }
   .board-column { order: -1; }
 }
 

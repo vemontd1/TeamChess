@@ -8,12 +8,16 @@
   gap: 16px;
 }
 
-.chat { display: flex; flex-direction: column; }
+.chat { display: flex; flex-direction: column; min-height: 0; }
+
+@media (max-width: 1180px) {
+  .chat-log { max-height: calc(196px * var(--ui)); flex: 0 0 auto; }
+}
 
 /* Whose conversation this is. The label is the only thing stopping a player from
    assuming the opposing team can read them -- so it is always on screen. */
 .chat-tag {
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--ui));
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -41,8 +45,9 @@
 }
 
 .chat-log {
-  min-height: 74px;
-  max-height: 196px;
+  min-height: calc(74px * var(--ui));
+  max-height: none;
+  flex: 1 1 auto;
   overflow-y: auto;
   padding: 10px 14px;
   display: flex;
@@ -52,7 +57,7 @@
 }
 
 .chat-msg {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui));
   line-height: 1.45;
   animation: chat-in 220ms var(--ease-out);
 }
@@ -62,7 +67,7 @@
 }
 
 .chat-who {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui));
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -85,7 +90,7 @@
 .chip {
   appearance: none;
   font-family: var(--font-ui);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui));
   color: var(--text-dim);
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -108,18 +113,18 @@
   gap: 7px;
   padding: 0 14px 11px;
 }
-.chat-input { padding: 8px 11px; font-size: 13px; }
+.chat-input { padding: 8px 11px; font-size: calc(13px * var(--ui)); }
 .chat-form .btn { flex: 0 0 auto; }
 
 .chat-hint {
   padding: 0 14px 13px;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui));
   line-height: 1.5;
   color: var(--text-faint);
 }
 .chat-hint b {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--ui));
   color: var(--text-dim);
   background: rgba(255, 255, 255, 0.05);
   border-radius: 4px;
