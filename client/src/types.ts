@@ -33,7 +33,8 @@ export interface TeamView {
 }
 
 export interface GameOver {
-  reason: 'checkmate' | 'stalemate' | 'threefold' | 'fifty-move' | 'insufficient' | 'draw';
+  reason: 'checkmate' | 'stalemate' | 'threefold' | 'fifty-move' | 'insufficient'
+        | 'draw' | 'agreement' | 'resignation';
   winner: Color | 'draw' | null;
 }
 
@@ -51,6 +52,15 @@ export interface PendingTakeback {
   byColor: Color;       // team asking to take the move back
   byName: string;
   deadline: number;     // epoch ms when the request auto-declines
+  remainingMs: number;  // the same window as a duration, immune to client clock skew
+}
+
+/** A draw offered by one team, awaiting the other team's active seat. */
+export interface PendingDraw {
+  byColor: Color;
+  byName: string;
+  deadline: number;     // epoch ms when the offer lapses
+  remainingMs: number;  // time left on the offer, measured on the server's own clock
 }
 
 export interface RoomState {
@@ -64,6 +74,14 @@ export interface RoomState {
   activeSeatId: number | null;
   activePlayerName: string | null;
   turnDeadline: number | null;
+  /**
+   * Time left on the current turn, measured on the server's own clock at the instant this
+   * snapshot was taken. `turnDeadline` alone is an absolute server epoch, and a client
+   * whose clock is off by even a few seconds -- which is common, and was the case on the
+   * deployed host -- subtracts it from its own `Date.now()` and gets a countdown that is
+   * wrong or pinned at zero. A duration carries no clock in it, so it cannot skew.
+   */
+  turnRemainingMs: number | null;
   lastMove: { from: string; to: string } | null;
   lastMoveAuto: boolean;
   history: HistoryEntry[];
@@ -71,6 +89,7 @@ export interface RoomState {
   gameOver: GameOver | null;
   spectatorCount: number;
   pendingTakeback: PendingTakeback | null;
+  pendingDraw: PendingDraw | null;
   config: RoomConfig;
 }
 
@@ -90,6 +109,7 @@ export interface SeatTakePayload { color: Color; seatId: number; }
 export interface SeatBotPayload { color: Color; seatId: number; bot: boolean; }
 export interface MovePayload { from: string; to: string; promotion?: string; }
 export interface TakebackRespondPayload { accept: boolean; }
+export interface DrawRespondPayload { accept: boolean; }
 export interface JoinResult {
   ok: boolean;
   error?: string;
@@ -127,6 +147,12 @@ export interface ChatSendPayload { text: string; }
 export interface MarkTogglePayload { square: string; }
 
 // --- client-only ---
+
+/** Announced when a game ends by agreement rather than on the board. */
+export type GameEnded =
+  | { kind: 'resign'; byColor: Color; byName: string }
+  | { kind: 'draw-agreed' };
+
 export interface MoveFx {
   captured: boolean; castle: boolean; promotion: boolean; check: boolean; auto: boolean;
 }

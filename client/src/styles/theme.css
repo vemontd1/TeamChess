@@ -46,7 +46,10 @@
 
   /* elevation */
   --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
-  --shadow-piece: 0 2px 3px rgba(0, 0, 0, 0.45);
+  /* Layered: a tight contact darkening plus a wide soft falloff. A single 3px blur was
+     doing both jobs and doing neither -- hard enough at its edge to alias into a visible
+     step around every piece. */
+  --shadow-piece: 0 1px 1.5px rgba(0, 0, 0, 0.34), 0 4px 9px rgba(0, 0, 0, 0.38);
   --shadow-lift:  0 12px 24px rgba(0, 0, 0, 0.6);
 
   --radius: 14px;

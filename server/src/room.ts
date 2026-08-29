@@ -2,8 +2,8 @@ import { Chess } from 'chess.js';
 import { pickMove, pieceValue, type MoveStyle } from './bots.js';
 import type {
   Color, RoomConfig, RoomState, SeatView, TeamView, GameOver, SeatKind,
-  SeatStats, HistoryEntry, PendingTakeback, MovePayload, ChatMessage, ChatChannel,
-  MarkView,
+  SeatStats, HistoryEntry, PendingTakeback, PendingDraw, MovePayload, ChatMessage,
+  ChatChannel, MarkView,
 } from './types.js';
 
 export interface InternalSeat {
@@ -47,6 +47,8 @@ export interface Room {
   botTimer: ReturnType<typeof setTimeout> | null;
   takebackTimer: ReturnType<typeof setTimeout> | null;
   pendingTakeback: PendingTakeback | null;
+  drawTimer: ReturnType<typeof setTimeout> | null;
+  pendingDraw: PendingDraw | null;
   lastMove: { from: string; to: string } | null;
   lastMoveAuto: boolean;
   history: HistoryEntry[];
@@ -128,6 +130,8 @@ export function createRoom(config: RoomConfig): Room {
     botTimer: null,
     takebackTimer: null,
     pendingTakeback: null,
+    drawTimer: null,
+    pendingDraw: null,
     lastMove: null,
     lastMoveAuto: false,
     history: [],
@@ -258,8 +262,10 @@ export function applyMove(room: Room, m: MovePayload, opts: { auto?: boolean } =
 
   room.lastMove = { from: res.from, to: res.to };
   room.lastMoveAuto = auto;
-  // marks describe *this* position, so they expire with it
+  // marks describe *this* position, so they expire with it -- and so does a draw offer,
+  // which was made about a position that no longer exists
   room.marks.clear();
+  clearDraw(room);
 
   // advance this team's rotation past the seat that just moved
   if (seat) team.cursor = (seat.id + 1) % team.seats.length;
@@ -319,6 +325,11 @@ export function clearTimer(room: Room): void {
 export function clearTakeback(room: Room): void {
   if (room.takebackTimer) { clearTimeout(room.takebackTimer); room.takebackTimer = null; }
   room.pendingTakeback = null;
+}
+
+export function clearDraw(room: Room): void {
+  if (room.drawTimer) { clearTimeout(room.drawTimer); room.drawTimer = null; }
+  room.pendingDraw = null;
 }
 
 export interface TurnHooks {
@@ -469,13 +480,23 @@ export function serialize(room: Room): RoomState {
     activeSeatId: a ? a.id : null,
     activePlayerName: a ? (a.name ?? (a.kind === 'bot' ? 'Bot' : null)) : null,
     turnDeadline: room.turnDeadline,
+    turnRemainingMs: room.turnDeadline != null
+      ? Math.max(0, room.turnDeadline - Date.now())
+      : null,
     lastMove: room.lastMove,
     lastMoveAuto: room.lastMoveAuto,
     history: room.history,
     inCheck: room.chess.inCheck(),
     gameOver: room.gameOver,
     spectatorCount: room.spectators.size,
-    pendingTakeback: room.pendingTakeback,
+    pendingTakeback: room.pendingTakeback && {
+      ...room.pendingTakeback,
+      remainingMs: Math.max(0, room.pendingTakeback.deadline - Date.now()),
+    },
+    pendingDraw: room.pendingDraw && {
+      ...room.pendingDraw,
+      remainingMs: Math.max(0, room.pendingDraw.deadline - Date.now()),
+    },
     config: room.config,
   };
 }
@@ -483,6 +504,7 @@ export function serialize(room: Room): RoomState {
 export function resetGame(room: Room, status: 'lobby' | 'playing'): void {
   clearTimer(room);
   clearTakeback(room);
+  clearDraw(room);
   room.chess = new Chess();
   room.status = status;
   room.gameOver = null;

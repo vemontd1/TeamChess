@@ -441,6 +441,31 @@
 .modal h2 { font-size: 27px; margin-bottom: 6px; }
 .modal p { color: var(--text-dim); font-size: 14px; margin: 0 0 20px; }
 
+/* ---- name gate: the invite-link arrival's only screen ---- */
+
+.name-gate .gate-mark {
+  font-size: 42px;
+  line-height: 1;
+  color: var(--accent);
+  margin-bottom: 12px;
+  text-shadow: 0 0 26px var(--accent-glow);
+}
+.name-gate .tfield { margin-bottom: 16px; text-align: left; }
+.name-gate .tfield input { text-align: center; font-size: 16px; }
+
+.name-gate.shake { animation: gate-shake 380ms var(--ease-out); }
+@keyframes gate-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-7px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .name-gate.shake { animation: none; }
+}
+
 /* ---- responsive ---- */
 
 @media (max-width: 1180px) {

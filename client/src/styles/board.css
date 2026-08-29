@@ -253,12 +253,15 @@
   width: 100%;
   height: 100%;
   display: block;
+  /* Pieces are small, high-contrast line art; the speed-optimised rasteriser some
+     browsers pick by default is what put the stair-steps on the strokes. */
+  shape-rendering: geometricPrecision;
   filter: drop-shadow(var(--shadow-piece));
   transition: filter var(--dur-ui) var(--ease-out), transform var(--dur-ui) var(--ease-out);
   pointer-events: none;
 }
 
-.pc-shadow ellipse { fill: rgba(0, 0, 0, 0.22); }
+.pc-shadow ellipse { fill: rgba(0, 0, 0, 0.30); }
 
 /* Lifting the piece grows its contact shadow and scales it up: the two together
    are what sell the piece as physically picked up off the board. */
@@ -269,8 +272,9 @@
 }
 .pc-drag .pc-svg {
   transform: scale(1.1);
-  filter: drop-shadow(0 14px 16px rgba(0, 0, 0, 0.6))
-          drop-shadow(0 0 14px rgba(232, 176, 75, 0.28));
+  filter: drop-shadow(0 6px 5px rgba(0, 0, 0, 0.34))
+          drop-shadow(0 16px 20px rgba(0, 0, 0, 0.55))
+          drop-shadow(0 0 16px rgba(232, 176, 75, 0.28));
 }
 
 .pc-captured {

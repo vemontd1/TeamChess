@@ -28,15 +28,29 @@ clock run down.
 | Setting | Effect |
 |---|---|
 | **Players per team** | 1–5 seats per side. |
-| **Seconds per move** | Fresh countdown every turn (not a cumulative chess clock). At zero the server plays a uniformly random legal move, flags it in the history, and advances the rotation. |
+| **Seconds per move** | Fresh countdown every turn (not a cumulative chess clock). At zero the server plays a uniformly random legal move, flags it in the history, and advances the rotation — and everyone hears it blow up. |
 | **Skip empty seats** | On: the rotation closes over occupied seats only. Off: every seat keeps its slot, and an empty one resolves on the clock. |
 | **Takebacks** | The team that just moved may ask; the **opposing** active player accepts or declines. Accepting rewinds the board *and* both rotation pointers. Declining resumes the banked clock remainder, so asking cannot buy thinking time. |
+
+A game does not have to be played to mate. Any seated player can **offer a draw** or
+**resign**, at any point in a live game and whether or not they are the one on the clock —
+a teammate watching a hopeless position through three other turns is exactly who needs it.
+A draw offer goes to the opposing team's active seat and lapses after twenty seconds;
+unlike a takeback it does not touch the clock, so it cannot be used to stop thinking.
+Resigning ends the game for the whole team, so it asks for confirmation first.
 
 Any seat can be switched to a **bot** by the host, which plays a weak one-ply greedy move —
 useful for uneven teams or for testing. Bots count as occupied seats.
 
 The server is authoritative for every rule: move legality, whose turn it is, the clock, and
 game end. A client that sends a move out of turn is simply refused.
+
+The clock is published as a **duration**, not only as a deadline. A snapshot carries both
+`turnDeadline` (the server's own epoch) and `turnRemainingMs`, and the client counts down
+the duration against its own clock. Subtracting a server epoch from a local `Date.now()` is
+correct exactly as long as the two machines agree about the time, and they do not: the
+deployed host ran half a minute behind a player's PC, which pinned every 30-second
+countdown at zero for the whole game. A duration has no clock inside it to disagree with.
 
 ## Running it
 
@@ -46,8 +60,10 @@ npm run dev          # server :3001, client :5173 (Vite proxies the socket)
 ```
 
 Open http://localhost:5173, create a room, and share the invite link (the room code in the
-top bar copies it). Each player needs their own browser profile — the seat is held by a token
-in `localStorage`, so two tabs in the same profile share one seat.
+top bar copies it). Someone arriving on the link is asked for a name before they enter, since
+they never saw the home screen where that field lives; anyone who has played before already
+has one stored and goes straight in. Each player needs their own browser profile — the seat
+is held by a token in `localStorage`, so two tabs in the same profile share one seat.
 
 ### Production
 
@@ -69,8 +85,10 @@ npm test             # in another
 `test/integration.mjs` drives real socket clients through the whole game: rotation order,
 turn enforcement, timeout auto-moves, rotation past a timed-out seat, takeback accept/decline
 (including that a requester cannot self-approve), bot seats, both `skipEmptySeats` modes,
-reconnect, checkmate detection, and that team chat and ghost marks reach the sender's own
-team and nobody else.
+reconnect, checkmate detection, draw offers and resignations (including that a spectator can
+do neither and that a side cannot accept its own draw), that the clock is published as a
+duration rather than only as an epoch, and that team chat and ghost marks reach the sender's
+own team and nobody else.
 
 ## Coordinating with your team
 
@@ -89,6 +107,7 @@ sending everything to everyone and asking the client to hide it.
 ## Controls
 
 - **Drag** a piece, or **click** it and click a destination.
+- **Offer draw** and **Resign** sit under the board while you hold a seat.
 - **F** — flip the board. **M** — mute. **E** — visual effects on/off.
 - **C** — jump to the chat box. **B** — jump back to the board.
 - The board only glows and accepts input when it is genuinely your turn.

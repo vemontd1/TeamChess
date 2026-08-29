@@ -6,12 +6,21 @@ const R = 64;
 const CIRC = 2 * Math.PI * R;
 
 /**
- * Countdown ring driven off the server's absolute deadline, with a particle fire
- * burning down the remaining arc.
+ * Countdown ring, with a particle fire burning down the remaining arc.
  *
- * It re-reads `Date.now()` against that deadline every frame rather than decrementing a
- * local counter, so a throttled background tab or a slow frame cannot desynchronise it
- * from the server that will actually fire the timeout.
+ * The server sends both an absolute deadline and the time left on its own clock. Only the
+ * duration is trusted: it is converted once, on arrival, into a deadline on *this*
+ * machine's clock. Subtracting the server's epoch from a local `Date.now()` looks correct
+ * until the two clocks disagree -- the deployed host ran half a minute behind a player's
+ * PC, which made every countdown expire before it was drawn, so the ring sat at zero for
+ * the whole game and no warning ever sounded.
+ *
+ * The local deadline is re-read against `Date.now()` every frame rather than decremented,
+ * so a throttled background tab or a slow frame still cannot drift.
+ *
+ * Re-syncing happens only when the server's deadline value actually changes -- a new turn
+ * or a re-armed clock. Every unrelated re-render (a chat line, a mark) carries the same
+ * snapshot, and resyncing on those would rewind the countdown a few frames at a time.
  */
 export class TimerRing {
   readonly el: HTMLElement;
@@ -21,6 +30,9 @@ export class TimerRing {
   private ring: HTMLElement;
   private fire: FireRing;
   private raf = 0;
+  /** The server's own value, kept only to notice when the turn changes. */
+  private serverDeadline: number | null = null;
+  /** The same moment expressed on this machine's clock -- what the countdown reads. */
   private deadline: number | null = null;
   private totalMs = 0;
   private lastWholeSecond = -1;
@@ -65,9 +77,13 @@ export class TimerRing {
    * progress, or a turn paused mid-takeback. `paused` distinguishes the last so a held
    * clock does not read as a full one.
    */
-  update(deadline: number | null, totalSec: number | null, who: string | null,
-         teamLabel: string, paused = false): void {
-    this.deadline = deadline;
+  update(deadline: number | null, remainingMs: number | null, totalSec: number | null,
+         who: string | null, teamLabel: string, paused = false): void {
+    if (deadline !== this.serverDeadline) {
+      this.serverDeadline = deadline;
+      this.deadline = deadline == null ? null : Date.now() + (remainingMs ?? 0);
+      this.lastWholeSecond = -1;
+    }
     this.totalMs = (totalSec ?? 0) * 1000;
 
     const whoEl = this.el.querySelector('.timer-who')!;
@@ -75,7 +91,7 @@ export class TimerRing {
       ? `<b>${escapeHtml(who)}</b>${escapeHtml(teamLabel)}`
       : `<span class="timer-team-idle">${escapeHtml(teamLabel)}</span>`;
 
-    if (deadline == null) {
+    if (this.deadline == null) {
       cancelAnimationFrame(this.raf);
       this.raf = 0;
       this.fire.clear();
@@ -104,10 +120,15 @@ export class TimerRing {
     const secs = Math.ceil(remaining / 1000);
     if (secs !== this.lastWholeSecond) {
       this.num.textContent = format(remaining);
-      // one beep per whole second inside the final stretch, never a stream of them
+      // One beep per whole second over the last ten, climbing in pitch and volume as the
+      // clock closes. The first tick after a resync is skipped: it lands on whatever
+      // fraction of a second the snapshot arrived in, not on a real boundary.
+      // Zero itself is silent here: the server's timeout broadcast carries the
+      // explosion, so a local blip at the same instant would only muddy it.
       if (this.soundOn && this.lastWholeSecond >= 0 && secs > 0) {
-        if (secs <= 5) sfx.tickUrgent();
-        else if (frac <= 0.25 && secs <= 10) sfx.tick();
+        if (secs <= 3) sfx.tickFinal();
+        else if (secs <= 5) sfx.tickUrgent();
+        else if (secs <= 10) sfx.tick();
       }
       this.lastWholeSecond = secs;
     }

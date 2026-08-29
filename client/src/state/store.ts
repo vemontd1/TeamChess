@@ -79,6 +79,31 @@ export function mustAnswerTakeback(s: AppState = state): boolean {
   return room.turn === you.seat.color && room.activeSeatId === you.seat.seatId;
 }
 
+/**
+ * True when this browser may offer a draw or resign: any seated player, at any point in a
+ * live game. Unlike a takeback this is not tied to having just moved -- a player watching
+ * a hopeless position through four teammates' turns is exactly who wants it.
+ */
+export function canEndGame(s: AppState = state): boolean {
+  const { room, you } = s;
+  return !!room && !!you?.seat && room.status === 'playing';
+}
+
+/** True when this browser may offer a draw right now. */
+export function canOfferDraw(s: AppState = state): boolean {
+  const { room } = s;
+  return canEndGame(s) && !room!.pendingDraw && !room!.pendingTakeback;
+}
+
+/** True when this browser must answer a draw offer: the opposing team's active seat. */
+export function mustAnswerDraw(s: AppState = state): boolean {
+  const { room, you } = s;
+  const pending = room?.pendingDraw;
+  if (!room || !you?.seat || !pending) return false;
+  if (you.seat.color === pending.byColor) return false;
+  return room[you.seat.color].activeSeatId === you.seat.seatId;
+}
+
 /** True when this browser may ask for a takeback (it played the last ply). */
 export function canRequestTakeback(s: AppState = state): boolean {
   const { room, you } = s;

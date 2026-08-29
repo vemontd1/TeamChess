@@ -169,6 +169,65 @@ function synth(freq: number, durMs: number, type: OscillatorType = 'sine', gain 
   } catch { /* ignore */ }
 }
 
+let noise: AudioBuffer | null = null;
+
+/** One second of white noise, generated once and reused as the body of the blast. */
+function noiseBuffer(a: AudioContext): AudioBuffer {
+  if (!noise) {
+    noise = a.createBuffer(1, a.sampleRate, a.sampleRate);
+    const ch = noise.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+  }
+  return noise;
+}
+
+/**
+ * A detonation: a broadband crack that decays into a rumble, over a sine that falls
+ * through two octaves as the sub-bass thump.
+ *
+ * The sample pack is a tabletop set -- dice, cards, wooden pieces. It has nothing
+ * percussive enough to read as a clock running out, and a shuffled deck is exactly the
+ * wrong idea: losing your turn to the clock should sound like something going wrong.
+ */
+function blast(gain = 0.5): void {
+  if (!enabled) return;
+  try {
+    const a = ac();
+    const t0 = a.currentTime;
+
+    // noise through a lowpass that slams shut: crack first, rumble after
+    const src = a.createBufferSource();
+    src.buffer = noiseBuffer(a);
+    const filt = a.createBiquadFilter();
+    filt.type = 'lowpass';
+    filt.Q.value = 1.1;
+    filt.frequency.setValueAtTime(5200, t0);
+    filt.frequency.exponentialRampToValueAtTime(160, t0 + 0.85);
+
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.012);
+    g.gain.exponentialRampToValueAtTime(gain * 0.22, t0 + 0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.1);
+    src.connect(filt).connect(g).connect(master ?? a.destination);
+    src.start(t0);
+    src.stop(t0 + 1.15);
+
+    // the sub thump underneath, falling 120Hz -> 30Hz
+    const sub = a.createOscillator();
+    const sg = a.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(120, t0);
+    sub.frequency.exponentialRampToValueAtTime(30, t0 + 0.5);
+    sg.gain.setValueAtTime(0.0001, t0);
+    sg.gain.exponentialRampToValueAtTime(gain * 0.9, t0 + 0.02);
+    sg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.75);
+    sub.connect(sg).connect(master ?? a.destination);
+    sub.start(t0);
+    sub.stop(t0 + 0.8);
+  } catch { /* ignore */ }
+}
+
 let moveToggle = 0;
 let impactToggle = 0;
 
@@ -186,11 +245,17 @@ export const sfx = {
   /** Check: the impact pitched up so it reads as an alarm, not a move. */
   check(): void { play('piece-impact-2', { gain: 0.95, rate: 1.35 }); },
   promote(): void { play('dice-roll-1', { gain: 0.9 }); },
-  /** Timeout: a scramble, then the piece landing where chance put it. */
+  /**
+   * The clock ran out. The blast lands on the instant it expired; the scramble and the
+   * knock behind it are the board picking a move at random and putting a piece down.
+   */
   timeout(): void {
-    play('deck-shuffle-1', { gain: 0.9 });
-    play('piece-impact-1', { gain: 1.0, delay: 0.22 });
+    blast(0.5);
+    play('deck-shuffle-1', { gain: 0.6, delay: 0.10 });
+    play('piece-impact-1', { gain: 1.0, delay: 0.34 });
   },
+  /** The same detonation on its own, for an ending that is not a move. */
+  explosion(): void { blast(0.5); },
   seatJoin(): void { play('paper-flip-1', { gain: 0.8 }); },
   start(): void { play('deck-shuffle-2', { gain: 0.95 }); },
 
@@ -242,6 +307,20 @@ export const sfx = {
   /** Takeback declined: one flat, damped note. Polite, and over. */
   takebackNo(): void { synth(196, 220, 'triangle', 0.05); },
 
+  /** A draw is offered: the takeback question, a fifth lower -- asked, not demanded. */
+  drawOffer(): void {
+    bell(329.63, 800, 0.13);
+    bell(392.00, 1000, 0.12, 0.12);
+  },
+  /** A draw offer declined: the same damped no. */
+  drawNo(): void { synth(196, 240, 'triangle', 0.06); },
+  /** A team resigned: a short fall, and the board being put away. */
+  resign(): void {
+    bell(261.63, 900, 0.14);
+    bell(196.00, 1500, 0.13, 0.18);
+    play('deck-shuffle-2', { gain: 0.45, rate: 0.8 });
+  },
+
   /** A message arrived for your team: a tick at the edge of hearing. */
   chat(): void { synth(1320, 34, 'sine', 0.028); },
   /** You marked a square. A teammate's mark is the same tick, quieter. */
@@ -251,8 +330,19 @@ export const sfx = {
   hover(): void { play('dice-pickup-2', { gain: 0.11, rate: 1.7 }); },
   pickup(): void { play('dice-pickup-1', { gain: 0.35, rate: 1.2 }); },
   illegal(): void { synth(140, 110, 'sawtooth', 0.04); },
-  tick(): void { synth(660, 45, 'sine', 0.035); },
-  tickUrgent(): void { synth(980, 55, 'triangle', 0.06); },
+
+  /**
+   * Three tiers of clock warning, climbing in pitch and level as the turn closes. The
+   * old single tick sat at 0.035 gain -- below the move sounds it had to be heard over,
+   * which is why a countdown could expire without anyone noticing it had started.
+   */
+  tick(): void { synth(660, 55, 'sine', 0.13); },
+  tickUrgent(): void { synth(880, 65, 'triangle', 0.22); },
+  /** The last three seconds: a double blip, so it reads as a different sound entirely. */
+  tickFinal(): void {
+    synth(1175, 60, 'square', 0.20);
+    setTimeout(() => synth(1568, 80, 'square', 0.22), 90);
+  },
   /**
    * Your move: a rising perfect fourth (D5 -> G5) under a soft wooden knock. Rising and
    * unresolved reads as a prompt; the interval is wide enough to cut through a room but

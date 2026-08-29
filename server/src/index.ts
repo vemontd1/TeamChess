@@ -9,15 +9,17 @@ import {
   rooms, createRoom, sanitizeConfig, teamFor, activeSeat, seatByToken,
   occupiedCount, applyMove, undoPly, clearTimer, clearTakeback, armTurn,
   playForcedMove, serialize, resetGame, channelFor, chatFor, cleanChatText,
-  pushChat, toggleMark, clearMarksFor, marksFor, type Room, type TurnHooks,
+  pushChat, toggleMark, clearMarksFor, marksFor, clearDraw,
+  type Room, type TurnHooks,
 } from './room.js';
 import type {
   Color, CreatePayload, JoinPayload, SeatTakePayload, SeatBotPayload,
-  MovePayload, TakebackRespondPayload, JoinResult, You, ChatSendPayload,
-  MarkTogglePayload,
+  MovePayload, TakebackRespondPayload, DrawRespondPayload, JoinResult, You,
+  ChatSendPayload, MarkTogglePayload,
 } from './types.js';
 
 const TAKEBACK_WINDOW_MS = 20_000;
+const DRAW_WINDOW_MS = 20_000;
 
 // Chat is the one place a client can push arbitrary text at everyone else, so it gets a
 // token bucket: a burst of six is fine, sustained is one every two seconds.
@@ -321,12 +323,79 @@ io.on('connection', (socket: Socket) => {
 
   // ---- takeback: the team that just moved asks, the team on move decides ----
 
+  // ---- ending a game early: resign, or agree a draw ----
+
+  /**
+   * One player resigns for their whole team. Nobody else has to agree: a team that has
+   * to poll itself before it can concede would sit in a lost position while a teammate
+   * who has walked away never answers.
+   */
+  socket.on('game:resign', () => {
+    const room = roomOf();
+    const token = data.token;
+    if (!room || !token || room.status !== 'playing') return;
+    const found = seatByToken(room, token);
+    if (!found) return;   // spectators have nothing to give up
+
+    clearTimer(room);
+    clearTakeback(room);
+    clearDraw(room);
+    room.status = 'finished';
+    room.gameOver = {
+      reason: 'resignation',
+      winner: found.color === 'white' ? 'black' : 'white',
+    };
+    io.to(room.id).emit('game:ended', {
+      kind: 'resign', byColor: found.color, byName: found.seat.name ?? 'Player',
+    });
+    broadcast(room);
+  });
+
+  /**
+   * A draw offer, answered by the opposing team's active seat -- the same rule the
+   * takeback uses, so exactly one player on the other side is ever on the hook for it.
+   * Unlike a takeback it does not touch the clock: an offer that banked the mover's
+   * remaining time would be a free way to stop thinking.
+   */
+  socket.on('draw:offer', () => {
+    const room = roomOf();
+    const token = data.token;
+    if (!room || !token || room.status !== 'playing') return;
+    if (room.pendingDraw || room.pendingTakeback) return;
+
+    const asker = seatByToken(room, token);
+    if (!asker) return;
+
+    room.pendingDraw = {
+      byColor: asker.color,
+      byName: asker.seat.name ?? 'Player',
+      deadline: Date.now() + DRAW_WINDOW_MS,
+      remainingMs: DRAW_WINDOW_MS,
+    };
+    room.drawTimer = setTimeout(() => resolveDraw(room, false), DRAW_WINDOW_MS);
+    broadcast(room);
+  });
+
+  socket.on('draw:respond', (payload: DrawRespondPayload) => {
+    const room = roomOf();
+    const token = data.token;
+    if (!room || !token || !room.pendingDraw) return;
+
+    const answerer = seatByToken(room, token);
+    if (!answerer || answerer.color === room.pendingDraw.byColor) return;
+    const active = activeSeat(room, teamFor(room, answerer.color));
+    if (!active || active.token !== token) return;
+
+    resolveDraw(room, payload?.accept === true);
+  });
+
   socket.on('takeback:request', () => {
     const room = roomOf();
     const token = data.token;
     if (!room || !token || room.status !== 'playing') return;
     if (!room.config.allowTakeback || room.pendingTakeback) return;
     if (room.history.length === 0) return;
+    clearDraw(room);   // one question at a time
 
     // only the team that played the last ply may ask, and only via a seated player
     const lastEntry = room.history[room.history.length - 1];
@@ -343,6 +412,7 @@ io.on('connection', (socket: Socket) => {
       byColor: asker.color,
       byName: asker.seat.name ?? 'Player',
       deadline: Date.now() + TAKEBACK_WINDOW_MS,
+      remainingMs: TAKEBACK_WINDOW_MS,
     };
     room.takebackTimer = setTimeout(() => resolveTakeback(room, false), TAKEBACK_WINDOW_MS);
     broadcast(room);
@@ -376,6 +446,7 @@ io.on('connection', (socket: Socket) => {
         occupiedCount(room.white) === 0 && occupiedCount(room.black) === 0) {
       clearTimer(room);
       clearTakeback(room);
+      clearDraw(room);
       rooms.delete(room.id);
     } else {
       broadcast(room);
@@ -388,6 +459,26 @@ io.on('connection', (socket: Socket) => {
  * restored position; declining resumes the banked remainder so the asker cannot buy time
  * by requesting a takeback they expect to be refused.
  */
+/**
+ * Settle a draw offer. Accepting ends the game by agreement; a decline (or the window
+ * lapsing) simply drops the offer and leaves the clock exactly where it was.
+ */
+function resolveDraw(room: Room, accept: boolean): void {
+  if (!room.pendingDraw) return;
+  clearDraw(room);
+
+  if (accept) {
+    clearTimer(room);
+    clearTakeback(room);
+    room.status = 'finished';
+    room.gameOver = { reason: 'agreement', winner: 'draw' };
+    io.to(room.id).emit('game:ended', { kind: 'draw-agreed' });
+  } else {
+    io.to(room.id).emit('draw:resolved', { accepted: false });
+  }
+  broadcast(room);
+}
+
 function resolveTakeback(room: Room, accept: boolean): void {
   if (!room.pendingTakeback) return;
   const banked = room.bankedMs;

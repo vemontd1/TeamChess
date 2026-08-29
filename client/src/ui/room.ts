@@ -11,7 +11,7 @@ import { effectsEnabled, toggleMotion, systemPrefersReduced, getMotionPref, moti
 import * as net from '../net/socket';
 import {
   getState, setState, subscribe, orientation, isMyTurn, mustAnswerTakeback,
-  canRequestTakeback, isSeated, type AppState,
+  canRequestTakeback, canOfferDraw, canEndGame, mustAnswerDraw, isSeated, type AppState,
 } from '../state/store';
 import type { Color, RoomState, MoveFx, ChatChannel, HistoryEntry } from '../types';
 
@@ -121,6 +121,9 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   let myTurnAnnounced = false;
   let firstRender = true;
   let takebackWasPending = false;
+  let drawWasPending = false;
+  let drawRaf = 0;
+  let drawHost: HTMLElement | null = null;
 
   // ---- socket side effects -------------------------------------------------
 
@@ -149,6 +152,26 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     if (getState().soundOn) {
       if (r.accepted) sfx.takebackYes(); else sfx.takebackNo();
     }
+  });
+
+  net.onDrawResolved(() => {
+    toast('Draw declined');
+    announce('The draw offer was declined');
+    if (getState().soundOn) sfx.drawNo();
+  });
+
+  net.onGameEnded(e => {
+    if (e.kind === 'resign') {
+      const line = `${e.byName} resigned for ${e.byColor === 'white' ? 'White' : 'Black'}`;
+      toast(line);
+      announce(`${line}.`);
+    } else {
+      toast('Draw agreed');
+      announce('The draw was agreed.');
+    }
+    // the endgame cue itself comes from the finished state in render(); this is the
+    // gesture that caused it, which nothing else would report
+    if (getState().soundOn && e.kind === 'resign') sfx.resign();
   });
 
   // Chat and marks arrive on their own channels: the server sends each socket only what
@@ -211,6 +234,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     timer.setSound(s.soundOn);
     timer.update(
       room.turnDeadline,
+      room.turnRemainingMs,
       room.config.moveTimerSec,
       room.status === 'playing' ? room.activePlayerName : null,
       activeTeam,
@@ -219,6 +243,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
     renderControls(s, isHost);
     renderTakeback(s);
+    renderDrawOffer(s);
 
     // Your move: screen bloom + board pulse + chime, once on the transition into
     // your turn. Not fired on the very first render after joining, which would
@@ -245,6 +270,14 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       if (s.soundOn && s.you?.seat && s.you.seat.color !== pending.byColor) sfx.takebackAsk();
     }
     takebackWasPending = pending != null;
+
+    // a draw offer is likewise a question aimed at the other side
+    const draw = room.pendingDraw;
+    if (draw && !drawWasPending) {
+      announce(`${draw.byName} offered a draw`);
+      if (s.soundOn && s.you?.seat && s.you.seat.color !== draw.byColor) sfx.drawOffer();
+    }
+    drawWasPending = draw != null;
 
     // timeout banner: fire on the transition, from the history entry the server recorded
     if (room.history.length > lastHistoryLen) {
@@ -287,6 +320,13 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       if (canRequestTakeback(s)) {
         parts.push(`<button class="btn btn-sm" id="tbreq">Request takeback</button>`);
       }
+      // A team that is lost, or agreed on a draw, needs a way out that is not waiting for
+      // mate. Both are open to any seated player, not just whoever is on the clock.
+      if (canEndGame(s)) {
+        parts.push(`<button class="btn btn-sm" id="drawoffer"
+          ${canOfferDraw(s) ? '' : 'disabled'}>Offer draw</button>`);
+        parts.push(`<button class="btn btn-sm btn-danger" id="resign">Resign</button>`);
+      }
       if (isHost) {
         parts.push(`<button class="btn btn-sm btn-ghost" id="reset">Back to lobby</button>`);
       }
@@ -303,6 +343,26 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       net.requestTakeback();
       toast('Takeback requested — waiting on your opponent');
     });
+    controls.querySelector('#drawoffer')?.addEventListener('click', () => {
+      net.offerDraw();
+      toast('Draw offered — waiting on your opponent');
+      sfx.click();
+    });
+    // Resigning ends the game for the whole team and cannot be undone, so it asks first.
+    controls.querySelector('#resign')?.addEventListener('click', () => {
+      const side = s.you?.seat?.color === 'white' ? 'White' : 'Black';
+      const { host, close } = modal(`
+        <h2>Resign?</h2>
+        <p>This ends the game for all of Team ${side}, not only for you. It cannot be
+           taken back.</p>
+        <div class="btn-row" style="justify-content:center;margin-top:20px">
+          <button class="btn btn-danger" id="rsyes">Resign</button>
+          <button class="btn btn-ghost" id="rsno">Keep playing</button>
+        </div>`);
+      host.querySelector('#rsno')!.addEventListener('click', close);
+      host.querySelector('#rsyes')!.addEventListener('click', () => { close(); net.resign(); });
+      host.addEventListener('click', e => { if (e.target === host) close(); });
+    });
   }
 
   /** The pending-takeback prompt is only actionable for the opposing active player. */
@@ -314,6 +374,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       return;
     }
     const answerable = mustAnswerTakeback(s);
+    const fresh = !takebackHost;
     if (!takebackHost) {
       takebackHost = document.createElement('section');
       takebackHost.className = 'panel edge takeback';
@@ -336,15 +397,72 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     takebackHost.querySelector('#tbyes')?.addEventListener('click', () => net.respondTakeback(true));
     takebackHost.querySelector('#tbno')?.addEventListener('click', () => net.respondTakeback(false));
 
-    const fill = takebackHost.querySelector<HTMLElement>('#tbfill')!;
-    const total = 20_000;
-    const step = (): void => {
-      const left = Math.max(0, pending.deadline - Date.now());
-      fill.style.width = `${(left / total) * 100}%`;
-      if (left > 0) tbRaf = requestAnimationFrame(step);
-    };
-    cancelAnimationFrame(tbRaf);
-    step();
+    if (fresh) {
+      const fill = takebackHost.querySelector<HTMLElement>('#tbfill')!;
+      const total = 20_000;
+      const endsAt = Date.now() + pending.remainingMs;
+      const step = (): void => {
+        const left = Math.max(0, endsAt - Date.now());
+        const bar = takebackHost?.querySelector<HTMLElement>('#tbfill') ?? fill;
+        bar.style.width = `${(left / total) * 100}%`;
+        if (left > 0) tbRaf = requestAnimationFrame(step);
+      };
+      cancelAnimationFrame(tbRaf);
+      step();
+    }
+  }
+
+  /**
+   * The draw prompt. Only the opposing team's active seat can answer it; everyone else
+   * sees that the question is out, which matters in a team game where a teammate needs to
+   * know an offer is on the table before they plan around it.
+   */
+  function renderDrawOffer(s: AppState): void {
+    const pending = s.room?.pendingDraw ?? null;
+    if (!pending) {
+      cancelAnimationFrame(drawRaf); drawRaf = 0;
+      drawHost?.remove(); drawHost = null;
+      return;
+    }
+    const answerable = mustAnswerDraw(s);
+    const fresh = !drawHost;
+    if (!drawHost) {
+      drawHost = document.createElement('section');
+      drawHost.className = 'panel edge takeback';
+      rightCol.prepend(drawHost);
+    }
+    drawHost.innerHTML = `
+      <div class="panel-head"><span class="panel-title">Draw offered</span></div>
+      <div class="panel-body">
+        <p style="margin:0 0 12px;font-size:13.5px;color:var(--text-dim)">
+          <b style="color:var(--text)">${escapeHtml(pending.byName)}</b>
+          offers a draw.</p>
+        ${answerable ? `<div class="btn-row">
+          <button class="btn btn-sm btn-primary" id="dryes">Accept</button>
+          <button class="btn btn-sm btn-danger" id="drno">Decline</button>
+        </div>` : `<div style="font-size:12.5px;color:var(--text-faint)">
+          Waiting on the opposing player to answer…</div>`}
+        <div class="tb-bar"><div class="tb-fill" id="drfill"></div></div>
+      </div>`;
+
+    drawHost.querySelector('#dryes')?.addEventListener('click', () => net.respondDraw(true));
+    drawHost.querySelector('#drno')?.addEventListener('click', () => net.respondDraw(false));
+
+    // The countdown runs on this machine's clock from the duration the server sent, for
+    // the same reason the turn clock does -- an absolute server epoch would skew.
+    if (fresh) {
+      const fill = drawHost.querySelector<HTMLElement>('#drfill')!;
+      const total = 20_000;
+      const endsAt = Date.now() + pending.remainingMs;
+      const step = (): void => {
+        const left = Math.max(0, endsAt - Date.now());
+        const bar = drawHost?.querySelector<HTMLElement>('#drfill') ?? fill;
+        bar.style.width = `${(left / total) * 100}%`;
+        if (left > 0) drawRaf = requestAnimationFrame(step);
+      };
+      cancelAnimationFrame(drawRaf);
+      step();
+    }
   }
 
   function showGameOver(room: RoomState, isHost: boolean): void {
@@ -355,7 +473,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     const { host, close } = modal(`
       <div class="go-crown">${w === 'draw' ? '½' : '♔'}</div>
       <div class="go-result">${title}</div>
-      <div class="go-reason">${escapeHtml(room.gameOver?.reason ?? '')}</div>
+      <div class="go-reason">${escapeHtml(reasonLabel(room))}</div>
       <div style="margin-top:20px" id="gostats"></div>
       <div class="btn-row" style="justify-content:center;margin-top:20px">
         ${isHost ? '<button class="btn btn-primary" id="goagain">Rematch</button>' : ''}
@@ -439,6 +557,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     timer.destroy();
     board.destroy();
     cancelAnimationFrame(tbRaf);
+    cancelAnimationFrame(drawRaf);
     window.removeEventListener('resize', sizeBoard);
     window.removeEventListener('keydown', onKey);
   };
@@ -474,7 +593,21 @@ function gameOverLine(room: RoomState): string {
   const head = w === 'draw' ? 'Draw'
     : w === 'white' ? 'White wins'
     : w === 'black' ? 'Black wins' : 'Game over';
-  return `${head}, by ${room.gameOver?.reason ?? 'agreement'}.`;
+  return `${head} — ${reasonLabel(room)}.`;
+}
+
+/** The reason as a phrase; the raw enum reads as a stub next to the result. */
+function reasonLabel(room: RoomState): string {
+  switch (room.gameOver?.reason) {
+    case 'checkmate':    return 'checkmate';
+    case 'stalemate':    return 'stalemate';
+    case 'threefold':    return 'threefold repetition';
+    case 'fifty-move':   return 'the fifty-move rule';
+    case 'insufficient': return 'insufficient material';
+    case 'resignation':  return 'resignation';
+    case 'agreement':    return 'agreement';
+    default:             return 'a draw';
+  }
 }
 
 /**

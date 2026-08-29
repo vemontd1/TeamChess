@@ -8,6 +8,7 @@ import './styles/turn.css';
 
 import { renderHome } from './ui/home';
 import { renderRoom } from './ui/room';
+import { askName } from './ui/nameGate';
 import { toast } from './ui/widgets';
 import { connect, joinRoom, getName } from './net/socket';
 import { setState, getState } from './state/store';
@@ -35,7 +36,12 @@ async function route(): Promise<void> {
     return;
   }
 
-  const res = await joinRoom(roomId, getName() || 'Player');
+  // Someone who arrived on an invite link never saw the home screen's name field, so ask
+  // for one before joining rather than seating them as "Player". Anyone who has played
+  // before already has a name stored and goes straight in.
+  const name = getName() || await askName(roomId);
+
+  const res = await joinRoom(roomId, name);
   if (!res.ok) {
     toast(res.error ?? 'Could not join that room', 'danger');
     location.hash = '';
@@ -57,5 +63,5 @@ void route();
 // A dropped socket re-joins the same room, and the token in localStorage reclaims the seat.
 window.addEventListener('online', () => {
   const id = parseRoute();
-  if (id && !getState().connected) void joinRoom(id, getName() || 'Player');
+  if (id && !getState().connected) void joinRoom(id, getName() || 'Player');   // reclaim by token
 });

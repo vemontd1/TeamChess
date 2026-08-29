@@ -1,6 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import type {
   RoomState, JoinResult, RoomConfig, Color, MovePayload, MoveFx, ChatMessage, MarkView,
+  GameEnded,
 } from '../types';
 import { setState } from '../state/store';
 
@@ -75,6 +76,11 @@ export function requestTakeback(): void { sock().emit('takeback:request'); }
 export function respondTakeback(accept: boolean): void {
   sock().emit('takeback:respond', { accept });
 }
+export function resign(): void { sock().emit('game:resign'); }
+export function offerDraw(): void { sock().emit('draw:offer'); }
+export function respondDraw(accept: boolean): void {
+  sock().emit('draw:respond', { accept });
+}
 
 export function sendMove(m: MovePayload): Promise<boolean> {
   return new Promise(resolve => {
@@ -101,6 +107,11 @@ export function onSeatJoin(fn: () => void): void { bind('game:seat-join', fn); }
 export function onTakebackResolved(fn: (r: { accepted: boolean }) => void): void {
   bind('takeback:resolved', fn);
 }
+export function onDrawResolved(fn: (r: { accepted: boolean }) => void): void {
+  bind('draw:resolved', fn);
+}
+/** A game ended by something other than the board: a resignation or an agreed draw. */
+export function onGameEnded(fn: (e: GameEnded) => void): void { bind('game:ended', fn); }
 export function onChat(fn: (m: ChatMessage) => void): void { bind('chat:new', fn); }
 export function onChatHistory(fn: (m: ChatMessage[]) => void): void { bind('chat:history', fn); }
 export function onMarks(fn: (m: MarkView[]) => void): void { bind('mark:state', fn); }

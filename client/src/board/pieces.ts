@@ -12,9 +12,9 @@ export type PieceCode = `${PieceColor}${PieceType}`;
 
 /** Body paths, drawn in a 45x45 viewBox with the base sitting near y=38. */
 const BODY: Record<PieceType, string> = {
-  p: `M22.5 9a4.6 4.6 0 0 0-2.6 8.4c-1.6.9-2.7 2.6-2.7 4.6 0 2.2 1.3 4.1 3.2 5
-      -2.6 1.2-6.2 4.5-7.2 12.4h19.6c-1-7.9-4.6-11.2-7.2-12.4a5.6 5.6 0 0 0 3.2-5
-      c0-2-1.1-3.7-2.7-4.6A4.6 4.6 0 0 0 22.5 9z`,
+  p: `M22.5 12.4a4.3 4.3 0 0 0-2.4 7.9c-1.5.8-2.5 2.4-2.5 4.3 0 2 1.2 3.8 3 4.7
+      -2.5 1.1-5.8 4.1-6.8 8.7h17.4c-1-4.6-4.3-7.6-6.8-8.7a5.2 5.2 0 0 0 3-4.7
+      c0-1.9-1-3.5-2.5-4.3a4.3 4.3 0 0 0-2.4-7.9z`,
 
   r: `M11 39h23v-4H11v4zm2-4.5h19v-4.5H13v4.5zM14 30V17h17v13H14zM11.5 17V9.5h4V13h4V9.5h6V13h4V9.5h4V17h-22z`,
 
@@ -34,16 +34,25 @@ const BODY: Record<PieceType, string> = {
       L10.6 15.6A2.2 2.2 0 0 1 9 13.5zM13 33h19c0 2-1 3-2.5 3h-14C14 36 13 35 13 33z
       M13.5 38h18v-1.2h-18V38z`,
 
-  /* Domed crown over a pinched collar, flaring to a stepped base; the cross sits
-     above as a detail stroke. */
-  k: `M22.5 10.4c3.3 0 5.7 2.2 5.7 5.4 0 1.8-.8 3.2-2 4.2 2.6 3 4.6 7.6 5.2 13H13.6
-      c.6-5.4 2.6-10 5.2-13-1.2-1-2-2.4-2-4.2 0-3.2 2.4-5.4 5.7-5.4z
-      M12.2 34.2h20.6v3.6H12.2v-3.6z`,
+  /*
+   * The king used to be a dome on a flared base -- which is also what a pawn is, only
+   * larger, and at board size the two were genuinely hard to tell apart. It is now built
+   * from the four things that make a Staunton king read at a glance and that a pawn has
+   * none of: a cross carried in the silhouette itself, a crown that widens rather than
+   * closes, a pinched collar, and a base twice the pawn's width.
+   *
+   * Cross, then crown shoulders, then the collar, then the two-tier base.
+   */
+  k: `M21.1 2.6h2.8v2.9h2.9v2.8h-2.9v2.9c3.6.6 6.2 3.4 6.2 6.8 0 2.1-1 4-2.6 5.2
+      1.4.8 2.3 2.1 2.3 3.6 0 1.2-.5 2.3-1.4 3.1h2.2l1.9 4.5H12.5l1.9-4.5h2.2
+      c-.9-.8-1.4-1.9-1.4-3.1 0-1.5.9-2.8 2.3-3.6a7 7 0 0 1-2.6-5.2
+      c0-3.4 2.6-6.2 6.2-6.8V8.3h-2.9V5.5h2.9V2.6z
+      M10.6 34.4h23.8v3.6H10.6v-3.6z`,
 };
 
 /** Extra strokes drawn on top of the body (crosses, crenellations, mitre slits). */
 const DETAIL: Partial<Record<PieceType, string>> = {
-  k: `M22.5 3.8v6.4M19.7 6.4h5.6M18.7 20a7.6 7.6 0 0 0 7.6 0`,
+  k: `M17.6 26.7h9.8M12.6 34.5h19.8`,
   b: `M22.5 15.5v5.5M20 18.2h5`,
   q: `M13.5 33.5h18M14 30.5h17`,
   r: `M14 30h17M13 34.6h19`,
@@ -71,13 +80,26 @@ function svgFor(code: PieceCode): string {
        stroke-linejoin="round" stroke-linecap="round" opacity="0.30"
        transform="translate(0,0.5)"/>`;
 
-  return `<svg viewBox="0 0 45 45" xmlns="http://www.w3.org/2000/svg" class="pc-svg">
-  <g class="pc-shadow"><ellipse cx="22.5" cy="39.6" rx="10.5" ry="2.4"/></g>
+  // A hard-edged ellipse under the piece is a shape, not a shadow: at board size its rim
+  // aliased into a visible stair-stepped band. Blurring it in the SVG -- where the filter
+  // runs at the rasterised size rather than on a scaled bitmap -- is what makes it read as
+  // contact rather than as a drawn oval. The id is per-colour so two <defs> never collide.
+  const blurId = `pcsh-${code}`;
+
+  return `<svg viewBox="-3 -3 51 51" xmlns="http://www.w3.org/2000/svg" class="pc-svg">
+  <defs>
+    <filter id="${blurId}" x="-50%" y="-120%" width="200%" height="340%">
+      <feGaussianBlur stdDeviation="1.15"/>
+    </filter>
+  </defs>
+  <g class="pc-shadow" filter="url(#${blurId})">
+    <ellipse cx="22.5" cy="39.4" rx="11.4" ry="2.5"/>
+  </g>
   ${rim}
-  <path d="${BODY[type]}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"
+  <path d="${BODY[type]}" fill="${fill}" stroke="${stroke}" stroke-width="1.6"
         stroke-linejoin="round" stroke-linecap="round"/>
-  ${detail ? `<path d="${detail}" fill="none" stroke="${stroke}" stroke-width="1.4"
-        stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>` : ''}
+  ${detail ? `<path d="${detail}" fill="none" stroke="${stroke}" stroke-width="1.3"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>` : ''}
 </svg>`;
 }
 

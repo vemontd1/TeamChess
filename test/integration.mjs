@@ -21,6 +21,8 @@ function mkClient(name) {
   s.token = `tok-${name}-${Math.random().toString(36).slice(2)}`;
   s.on('room:state', st => { s.states.push(st); s.last = st; });
   s.on('game:fx', f => s.fx.push(f));
+  s.on('game:ended', e => { s.ended = e; });
+  s.on('draw:resolved', r => { s.drawResolved = r; });
   s.on('chat:new', m => s.chat.push(m));
   s.on('chat:history', h => { s.chat = h.slice(); });
   s.on('mark:state', m => { s.marks = m; });
@@ -348,6 +350,118 @@ async function main() {
   await emitCb(c1, 'game:move', { from: 'e2', to: 'e4' });
   await sleep(150);
   check('a played ply clears the marks', c2.marks.length === 0, JSON.stringify(c2.marks));
+
+  log('\n=== 13. The clock is sent as a duration, not just an epoch ===');
+  // A client that subtracts an absolute server deadline from its own Date.now() gets a
+  // wrong countdown the moment the two clocks disagree, which is what happened in
+  // production. The duration is what the client actually counts down.
+  const ck1 = await mkClient('Clock-W');
+  const rid13 = await emitCb(ck1, 'room:create',
+    { name: 'T', config: { teamSize: 1, moveTimerSec: 30 } });
+  const ck2 = await mkClient('Clock-B');
+  for (const c of [ck1, ck2]) await join(c, rid13);
+  await emitCb(ck1, 'seat:take', { color: 'white', seatId: 0 });
+  await emitCb(ck2, 'seat:take', { color: 'black', seatId: 0 });
+  check('an idle lobby reports no remaining time', ck1.last.turnRemainingMs === null,
+    String(ck1.last.turnRemainingMs));
+
+  ck1.emit('game:start');
+  await waitFor(ck1, s => s.status === 'playing');
+  check('a live turn reports a duration close to the configured clock',
+    ck1.last.turnRemainingMs > 28_000 && ck1.last.turnRemainingMs <= 30_000,
+    String(ck1.last.turnRemainingMs));
+
+  await sleep(1200);
+  await emitCb(ck1, 'game:move', { from: 'e2', to: 'e4' });
+  await sleep(120);
+  check('the next turn gets a fresh full duration',
+    ck2.last.turnRemainingMs > 28_000, String(ck2.last.turnRemainingMs));
+
+  log('\n=== 14. Draw offers ===');
+  const d1 = await mkClient('Draw-W');
+  const rid14 = await emitCb(d1, 'room:create',
+    { name: 'D', config: { teamSize: 1, moveTimerSec: 60 } });
+  const d2 = await mkClient('Draw-B');
+  const d3 = await mkClient('Draw-Spec');
+  for (const c of [d1, d2, d3]) await join(c, rid14);
+  await emitCb(d1, 'seat:take', { color: 'white', seatId: 0 });
+  await emitCb(d2, 'seat:take', { color: 'black', seatId: 0 });
+  d1.emit('game:start');
+  await waitFor(d1, s => s.status === 'playing');
+
+  d3.emit('draw:offer');
+  await sleep(150);
+  check('a spectator cannot offer a draw', d1.last.pendingDraw === null,
+    JSON.stringify(d1.last.pendingDraw));
+
+  d1.emit('draw:offer');
+  await waitFor(d2, s => s.pendingDraw !== null);
+  check('an offer reaches both teams', d2.last.pendingDraw?.byColor === 'white',
+    JSON.stringify(d2.last.pendingDraw));
+  check('the offer carries a duration, not only a deadline',
+    d2.last.pendingDraw?.remainingMs > 15_000,
+    String(d2.last.pendingDraw?.remainingMs));
+
+  d1.emit('draw:respond', { accept: true });
+  await sleep(150);
+  check('the offering side cannot accept its own draw',
+    d1.last.status === 'playing' && d1.last.pendingDraw !== null);
+
+  d2.emit('draw:respond', { accept: false });
+  await sleep(150);
+  check('a decline clears the offer and play continues',
+    d1.last.pendingDraw === null && d1.last.status === 'playing');
+  check('the decline is announced', d1.drawResolved?.accepted === false,
+    JSON.stringify(d1.drawResolved));
+  check('a declined offer does not end the game', d1.last.gameOver === null);
+
+  d1.emit('draw:offer');
+  await waitFor(d2, s => s.pendingDraw !== null);
+  d2.emit('draw:respond', { accept: true });
+  await waitFor(d1, s => s.status === 'finished');
+  check('an accepted draw ends the game by agreement',
+    d1.last.gameOver?.reason === 'agreement' && d1.last.gameOver?.winner === 'draw',
+    JSON.stringify(d1.last.gameOver));
+  check('the agreed draw is announced', d1.ended?.kind === 'draw-agreed',
+    JSON.stringify(d1.ended));
+  check('the clock stops when the game ends by agreement',
+    d1.last.turnRemainingMs === null, String(d1.last.turnRemainingMs));
+
+  log('\n=== 15. Resignation ===');
+  const rs1 = await mkClient('Res-W');
+  const rid15 = await emitCb(rs1, 'room:create',
+    { name: 'R', config: { teamSize: 2, moveTimerSec: 60 } });
+  const rs2 = await mkClient('Res-W2');
+  const rs3 = await mkClient('Res-B');
+  const rs4 = await mkClient('Res-Spec');
+  for (const c of [rs1, rs2, rs3, rs4]) await join(c, rid15);
+  await emitCb(rs1, 'seat:take', { color: 'white', seatId: 0 });
+  await emitCb(rs2, 'seat:take', { color: 'white', seatId: 1 });
+  await emitCb(rs3, 'seat:take', { color: 'black', seatId: 0 });
+  rs1.emit('game:start');
+  await waitFor(rs1, s => s.status === 'playing');
+
+  rs4.emit('game:resign');
+  await sleep(150);
+  check('a spectator cannot resign', rs1.last.status === 'playing');
+
+  // the seat that resigns is not the one on the clock, which is the whole point of it
+  rs2.emit('game:resign');
+  await waitFor(rs1, s => s.status === 'finished');
+  check('any seated player may resign for their team',
+    rs1.last.gameOver?.reason === 'resignation', JSON.stringify(rs1.last.gameOver));
+  check('the opposing team is credited the win',
+    rs1.last.gameOver?.winner === 'black', JSON.stringify(rs1.last.gameOver));
+  check('the resignation names who gave it up',
+    rs3.ended?.kind === 'resign' && rs3.ended.byColor === 'white'
+      && rs3.ended.byName === 'Res-W2', JSON.stringify(rs3.ended));
+  check('the clock stops on a resignation', rs1.last.turnRemainingMs === null,
+    String(rs1.last.turnRemainingMs));
+
+  rs3.emit('game:resign');
+  await sleep(150);
+  check('a finished game cannot be resigned again',
+    rs1.last.gameOver?.winner === 'black', JSON.stringify(rs1.last.gameOver));
 
   log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);
   process.exit(failures === 0 ? 0 : 1);
