@@ -22,8 +22,8 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
         <header class="hero">
           <div class="hero-mark">♚</div>
           <h1 class="home-title">Bolotnoye <em>Logovo</em></h1>
-          <p class="home-sub">Team chess with rotating control. Your team shares one side —
-            each teammate moves in turn, and the clock waits for nobody.</p>
+          <p class="home-sub">Two ways to be asked the same question — can you play the
+            move you can see? Share a side with your team, or duel over a hand of cards.</p>
         </header>
 
         <section class="panel edge sheen">
@@ -34,14 +34,17 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
                      value="${escapeAttr(getName())}" autocomplete="off">
             </div>
 
+            <div id="mode-slot"></div>
+            <p class="mode-blurb" id="mode-blurb"></p>
+
             <div id="team-slot"></div>
             <div id="timer-slot"></div>
 
             <div class="rule"></div>
 
             <div class="opts">
-              ${toggle('skip', 'Skip empty seats',
-                'Rotation cycles only seats that have someone in them.', true)}
+              <div id="skip-opt">${toggle('skip', 'Skip empty seats',
+                'Rotation cycles only seats that have someone in them.', true)}</div>
               ${toggle('tb', 'Allow takebacks',
                 'The opposing player must accept before a move is rewound.', true)}
             </div>
@@ -70,14 +73,46 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
   const nm = root.querySelector<HTMLInputElement>('#nm')!;
   const code = root.querySelector<HTMLInputElement>('#code')!;
 
+  const MODE_BLURB: Record<string, string> = {
+    team: 'Your team shares one side. Teammates move in turn, and the clock waits '
+        + 'for nobody.',
+    cards: 'One against one. You may only move a piece you hold a card for — the king '
+         + 'excepted, and he is always free.',
+  };
+
+  const modeSlot = root.querySelector<HTMLElement>('#mode-slot')!;
+  const blurb = root.querySelector<HTMLElement>('#mode-blurb')!;
+  const teamSlot = root.querySelector<HTMLElement>('#team-slot')!;
+  const skipOpt = root.querySelector<HTMLElement>('#skip-opt')!;
+
+  // Chess Cards is a duel, so the roster size and the empty-seat rule have nothing to say
+  // in it; both are hidden rather than left sitting there inert.
+  const paintMode = (mode: string): void => {
+    blurb.textContent = MODE_BLURB[mode];
+    const solo = mode === 'cards';
+    teamSlot.hidden = solo;
+    skipOpt.hidden = solo;
+  };
+
+  const mode = new Segmented({
+    options: [
+      { value: 'team', label: 'Team Chess' },
+      { value: 'cards', label: 'Chess Cards' },
+    ],
+    value: 'team',
+    onChange: v => { paintMode(v); sfx.click(); },
+  });
+  modeSlot.innerHTML = `<span class="label">Game mode</span>`;
+  modeSlot.appendChild(mode.el);
+
   const teamSize = new Segmented({
     options: TEAM_STOPS.map(s => ({ value: String(s.value), label: s.label })),
     value: '3',
     onChange: () => sfx.click(),
   });
-  const teamSlot = root.querySelector('#team-slot')!;
   teamSlot.innerHTML = `<span class="label">Players per team</span>`;
   teamSlot.appendChild(teamSize.el);
+  paintMode('team');
 
   const timer = new Slider({
     stops: TIMER_STOPS,
@@ -100,6 +135,7 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
     const name = saveName();
     const secs = timer.value;
     const roomId = await createRoom(name, {
+      mode: mode.value as 'team' | 'cards',
       teamSize: Number(teamSize.value),
       moveTimerSec: secs > 0 ? secs : null,
       skipEmptySeats: root.querySelector<HTMLInputElement>('#skip')!.checked,

@@ -9,9 +9,10 @@ import {
   rooms, createRoom, sanitizeConfig, teamFor, activeSeat, seatByToken,
   occupiedCount, applyMove, undoPly, clearTimer, clearTakeback, armTurn,
   playForcedMove, serialize, resetGame, channelFor, chatFor, cleanChatText,
-  pushChat, toggleMark, clearMarksFor, marksFor, clearDraw,
+  pushChat, toggleMark, clearMarksFor, marksFor, clearDraw, useMulligan,
   type Room, type TurnHooks,
 } from './room.js';
+import { handView, drawTargetFor } from './cards.js';
 import type {
   Color, CreatePayload, JoinPayload, SeatTakePayload, SeatBotPayload,
   MovePayload, TakebackRespondPayload, DrawRespondPayload, JoinResult, You,
@@ -33,6 +34,7 @@ const io = new Server(httpServer, { cors: { origin: '*' } });
 function broadcast(room: Room): void {
   io.to(room.id).emit('room:state', serialize(room));
   void pushMarks(room);
+  void pushHands(room);
 }
 
 /**
@@ -55,6 +57,32 @@ async function eachMember(
 
 async function pushMarks(room: Room): Promise<void> {
   await eachMember(room, (s, token) => s.emit('mark:state', marksFor(room, token)));
+}
+
+/**
+ * Hands go out one socket at a time, never in `room:state`.
+ *
+ * The whole mode rests on not knowing what the opponent holds, and a hand broadcast to
+ * the room would be sitting in their network tab whatever the client chose to draw. A
+ * spectator holds no seat and so is sent nothing at all.
+ */
+async function pushHands(room: Room): Promise<void> {
+  if (!room.cards) return;
+  const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
+  await eachMember(room, (s, token) => {
+    const found = seatByToken(room, token);
+    if (!found) { s.emit('cards:hand', null); return; }
+    const side = room.cards![found.color];
+    const yourTurn = room.status === 'playing' && turn === found.color
+      && !room.pendingTakeback;
+    s.emit('cards:hand', {
+      color: found.color,
+      cards: handView(side, room.chess, yourTurn),
+      emergency: yourTurn && side.emergency,
+      mulliganAvailable: yourTurn && !side.mulliganUsed,
+      yourTurn,
+    });
+  });
 }
 
 /** Side effects the client needs to hear but cannot derive from state alone. */
@@ -322,6 +350,21 @@ io.on('connection', (socket: Socket) => {
   });
 
   // ---- takeback: the team that just moved asks, the team on move decides ----
+
+  /**
+   * Throw the hand away and take a fresh one, once per game. The move still has to be
+   * made afterwards, so this buys a different hand rather than a free turn.
+   */
+  socket.on('cards:mulligan', () => {
+    const room = roomOf();
+    const token = data.token;
+    if (!room || !token || !room.cards || room.pendingTakeback) return;
+    const found = seatByToken(room, token);
+    if (!found) return;
+    if (!useMulligan(room, found.color)) return;
+    io.to(room.id).emit('cards:mulliganed', { color: found.color });
+    broadcast(room);
+  });
 
   // ---- ending a game early: resign, or agree a draw ----
 

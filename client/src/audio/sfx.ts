@@ -257,6 +257,13 @@ export const sfx = {
   /** The same detonation on its own, for an ending that is not a move. */
   explosion(): void { blast(0.5); },
   seatJoin(): void { play('paper-flip-1', { gain: 0.8 }); },
+  /** A hand thrown away and redealt. */
+  shuffle(): void {
+    play('deck-shuffle-1', { gain: 0.85 });
+    play('deck-deal-2', { gain: 0.7, delay: 0.34 });
+  },
+  /** One card leaving your hand to pay for a move. */
+  cardPlay(): void { play('deck-deal-1', { gain: 0.55, rate: 1.2 }); },
   start(): void { play('deck-shuffle-2', { gain: 0.95 }); },
 
   /**

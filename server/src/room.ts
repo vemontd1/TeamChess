@@ -1,7 +1,13 @@
 import { Chess } from 'chess.js';
 import { pickMove, pieceValue, type MoveStyle } from './bots.js';
+import {
+  createCards, cardsPublic, drawTargetFor, drawUpTo, drawBonus, refreshEmergency,
+  resolveSpend, commitSpend, snapshotCards, movableTypes, cardCovers, FREE_PIECE,
+  mulligan as mulliganCards,
+  type CardsState, type Spend,
+} from './cards.js';
 import type {
-  Color, RoomConfig, RoomState, SeatView, TeamView, GameOver, SeatKind,
+  Color, GameMode, RoomConfig, RoomState, SeatView, TeamView, GameOver, SeatKind,
   SeatStats, HistoryEntry, PendingTakeback, PendingDraw, MovePayload, ChatMessage,
   ChatChannel, MarkView,
 } from './types.js';
@@ -29,6 +35,8 @@ interface PlyFrame {
   lastMoveAuto: boolean;
   entry: HistoryEntry;
   capturedValue: number;
+  /** Hands, decks and discards as they stood before the ply. Cards mode only. */
+  cards: CardsState | null;
 }
 
 export interface Room {
@@ -54,6 +62,7 @@ export interface Room {
   history: HistoryEntry[];
   frames: PlyFrame[];
   gameOver: GameOver | null;
+  cards: CardsState | null;         // cards mode only
   chat: ChatMessage[];              // every channel; filtered when delivered
   chatSeq: number;
   marks: Map<string, TeamMarks>;    // seat token -> that player's flagged squares
@@ -98,13 +107,19 @@ function makeTeam(color: Color, size: number): Team {
 }
 
 export function sanitizeConfig(c: Partial<RoomConfig> | undefined): RoomConfig {
-  const teamSize = Math.min(5, Math.max(1, Math.floor(Number(c?.teamSize) || 2)));
+  const mode: GameMode = c?.mode === 'cards' ? 'cards' : 'team';
+  // Chess Cards is a duel: the hidden hand is what one player holds, and a rotation of
+  // teammates sharing it would make it neither hidden nor a hand.
+  const teamSize = mode === 'cards'
+    ? 1
+    : Math.min(5, Math.max(1, Math.floor(Number(c?.teamSize) || 2)));
   let moveTimerSec: number | null = null;
   const raw = Number(c?.moveTimerSec);
   if (c?.moveTimerSec != null && Number.isFinite(raw) && raw > 0) {
     moveTimerSec = Math.min(600, Math.max(5, Math.floor(raw)));
   }
   return {
+    mode,
     teamSize,
     skipEmptySeats: c?.skipEmptySeats ?? true,
     moveTimerSec,
@@ -137,6 +152,7 @@ export function createRoom(config: RoomConfig): Room {
     history: [],
     frames: [],
     gameOver: null,
+    cards: null,
     chat: [],
     chatSeq: 0,
     marks: new Map(),
@@ -212,11 +228,35 @@ const FAIL: ApplyResult = {
   ok: false, captured: false, castle: false, promotion: false, check: false,
 };
 
+/**
+ * Find the legal move a from/to pair names, so the piece type can be known before the
+ * board is touched. Every candidate sharing a from/to square is the same piece, so the
+ * promotion choice does not change the answer.
+ */
+function peekMove(chess: Chess, m: MovePayload): { piece: string } | null {
+  const moves = chess.moves({ verbose: true }) as unknown as
+    Array<{ from: string; to: string; piece: string }>;
+  return moves.find(x => x.from === m.from && x.to === m.to) ?? null;
+}
+
 /** Validate and apply one ply, advancing only the moving team's cursor. */
-export function applyMove(room: Room, m: MovePayload, opts: { auto?: boolean } = {}): ApplyResult {
+export function applyMove(room: Room, m: MovePayload,
+                          opts: { auto?: boolean } = {}): ApplyResult {
   const mover: Color = room.chess.turn() === 'w' ? 'white' : 'black';
   const team = teamFor(room, mover);
   const seat = activeSeat(room, team);
+
+  // In cards mode the move has to be paid for. Work out which card covers the piece that
+  // is about to move and refuse outright if none does -- the board is never touched by a
+  // move the hand cannot afford, so there is no half-applied state to unwind.
+  const cardsBefore = room.cards ? snapshotCards(room.cards) : null;
+  let spend: Spend | null = null;
+  if (room.cards) {
+    const peek = peekMove(room.chess, m);
+    if (!peek) return FAIL;
+    spend = resolveSpend(room.cards[mover], peek.piece, m.cardId);
+    if (!spend) return FAIL;
+  }
 
   let res;
   try {
@@ -247,6 +287,7 @@ export function applyMove(room: Room, m: MovePayload, opts: { auto?: boolean } =
     lastMoveAuto: room.lastMoveAuto,
     entry,
     capturedValue,
+    cards: cardsBefore,
   });
   room.history.push(entry);
 
@@ -270,6 +311,13 @@ export function applyMove(room: Room, m: MovePayload, opts: { auto?: boolean } =
   // advance this team's rotation past the seat that just moved
   if (seat) team.cursor = (seat.id + 1) % team.seats.length;
   else team.cursor = (team.cursor + 1) % team.seats.length;
+
+  // Pay for the move, then take the card a capture earns. Tempo is the whole reason to
+  // go forward: an attack that lands widens the hand that has to sustain it.
+  if (room.cards && spend) {
+    commitSpend(room.cards[mover], spend);
+    if (capturedValue > 0) drawBonus(room.cards[mover]);
+  }
 
   if (room.chess.isGameOver()) {
     room.status = 'finished';
@@ -295,6 +343,8 @@ export function undoPly(room: Room): boolean {
 
   room.history.pop();
   room.marks.clear();
+  // The hands go back too, or a takeback would launder a spent Queen into a free one.
+  if (frame.cards) room.cards = frame.cards;
   room.white.cursor = frame.cursorWhite;
   room.black.cursor = frame.cursorBlack;
   room.lastMove = frame.lastMove;
@@ -346,6 +396,7 @@ export function armTurn(room: Room, hooks: TurnHooks, ms?: number): void {
   clearTimer(room);
   if (room.status !== 'playing') return;
 
+  beginCardTurn(room);
   room.turnStartedAt = Date.now();
 
   const configured = room.config.moveTimerSec != null ? room.config.moveTimerSec * 1000 : null;
@@ -362,9 +413,60 @@ export function armTurn(room: Room, hooks: TurnHooks, ms?: number): void {
   }
 }
 
+/**
+ * Open the turn for whoever is on move in cards mode: draw back up to the current target,
+ * then work out whether any card in the refreshed hand can move anything.
+ *
+ * Drawing "up to" a target rather than "one per turn" is what makes this safe to call
+ * from every path that re-arms a turn -- a declined takeback, a seat becoming a bot --
+ * because a hand already at the target draws nothing.
+ */
+export function beginCardTurn(room: Room): void {
+  if (!room.cards || room.status !== 'playing') return;
+  const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
+  const side = room.cards[turn];
+  drawUpTo(side, drawTargetFor(room.history.length));
+  refreshEmergency(side, room.chess);
+}
+
+/** The once-per-game hand reset. Only legal at the start of your own turn. */
+export function useMulligan(room: Room, color: Color): boolean {
+  if (!room.cards || room.status !== 'playing') return false;
+  const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
+  if (turn !== color) return false;
+  const side = room.cards[color];
+  if (!mulliganCards(side, drawTargetFor(room.history.length))) return false;
+  refreshEmergency(side, room.chess);
+  return true;
+}
+
+/**
+ * The piece types the side on move can actually move right now, king included.
+ *
+ * The clock and the bots both need this: a forced move in cards mode has to be one the
+ * hand could have paid for, or the timeout would play a move the player was never
+ * allowed to make.
+ */
+export function affordableTypes(room: Room): Set<string> | null {
+  if (!room.cards) return null;
+  const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
+  const side = room.cards[turn];
+  const movable = movableTypes(room.chess);
+
+  // the emergency move reaches everything, which is the point of it
+  if (side.emergency) return movable;
+
+  const out = new Set<string>();
+  if (movable.has(FREE_PIECE)) out.add(FREE_PIECE);
+  for (const type of movable) {
+    if (side.hand.some(c => cardCovers(c, type))) out.add(type);
+  }
+  return out;
+}
+
 /** Play a move for a seat that ran out of time: a uniformly random legal move. */
 export function playForcedMove(room: Room, style: MoveStyle = 'random'): ApplyResult | null {
-  const mv = pickMove(room.chess, style);
+  const mv = pickMove(room.chess, style, affordableTypes(room) ?? undefined);
   if (!mv) return null;
   return applyMove(room, mv, { auto: style === 'random' });
 }
@@ -493,6 +595,7 @@ export function serialize(room: Room): RoomState {
       ...room.pendingTakeback,
       remainingMs: Math.max(0, room.pendingTakeback.deadline - Date.now()),
     },
+    cards: room.cards ? cardsPublic(room.cards, room.history.length) : null,
     pendingDraw: room.pendingDraw && {
       ...room.pendingDraw,
       remainingMs: Math.max(0, room.pendingDraw.deadline - Date.now()),
@@ -515,6 +618,9 @@ export function resetGame(room: Room, status: 'lobby' | 'playing'): void {
   room.marks.clear();
   room.bankedMs = null;
   room.turnStartedAt = null;
+  // A fresh deal belongs to a game, not to a lobby: there is no hand to hold before the
+  // first move exists to spend it on.
+  room.cards = room.config.mode === 'cards' && status === 'playing' ? createCards() : null;
   room.white.cursor = 0;
   room.black.cursor = 0;
   for (const t of [room.white, room.black]) {

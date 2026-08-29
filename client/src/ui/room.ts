@@ -7,11 +7,13 @@ import {
 } from './widgets';
 import { sfx, setSoundEnabled, unlockAudio } from '../audio/sfx';
 import { showTurnAlert, clearTurnAlert } from './turnAlert';
+import { CardHand, reachOf, typesForKind, EMERGENCY_CARD_ID } from './cardHand';
 import { effectsEnabled, toggleMotion, systemPrefersReduced, getMotionPref, motionLevel } from '../state/motion';
 import * as net from '../net/socket';
 import {
   getState, setState, subscribe, orientation, isMyTurn, mustAnswerTakeback,
-  canRequestTakeback, canOfferDraw, canEndGame, mustAnswerDraw, isSeated, type AppState,
+  canRequestTakeback, canOfferDraw, canEndGame, mustAnswerDraw, isSeated, isCardsMode,
+  type AppState,
 } from '../state/store';
 import type { Color, RoomState, MoveFx, ChatChannel, HistoryEntry } from '../types';
 
@@ -19,7 +21,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   root.innerHTML = `
     <div class="shell">
       <header class="topbar">
-        <div class="brand"><b>Bolotnoye Logovo</b><span>Team Chess</span></div>
+        <div class="brand"><b>Bolotnoye Logovo</b><span id="mode-name">Team Chess</span></div>
         <div class="topbar-spacer"></div>
         <div class="conn"><span class="conn-dot"></span><span class="conn-text">Connected</span></div>
         <button class="btn btn-sm btn-ghost" id="copy" title="Copy the invite link">
@@ -38,6 +40,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
         <div class="board-column">
           <section class="panel edge" style="width:100%"><div class="tray" id="tray"></div></section>
           <div id="board"></div>
+          <div id="cards"></div>
           <div class="btn-row" id="controls"></div>
         </div>
 
@@ -52,12 +55,16 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   const rightCol = root.querySelector<HTMLElement>('#right')!;
   const trayEl = root.querySelector<HTMLElement>('#tray')!;
   const controls = root.querySelector<HTMLElement>('#controls')!;
+  const cardsHost = root.querySelector<HTMLElement>('#cards')!;
 
-  // ---- board sizing: fit the viewport without letting the board dominate wide screens
+  // ---- board sizing: fit the viewport without letting the board dominate wide screens.
+  // Cards mode parks a hand under the board, so the board has to give that space back or
+  // the cards fall off the bottom of the window.
   const sizeBoard = (): void => {
     const w = window.innerWidth;
     const avail = w > 1180 ? Math.min(w - 640, 620) : Math.min(w - 40, 560);
-    const h = window.innerHeight - 250;
+    const chrome = isCardsMode(getState()) ? 490 : 250;
+    const h = window.innerHeight - chrome;
     boardHost.style.setProperty('--board-size', `${Math.max(280, Math.min(avail, h))}px`);
   };
   sizeBoard();
@@ -69,7 +76,14 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   };
 
   const board = new Board(boardHost, {
-    onMove: (from, to, promotion) => net.sendMove({ from, to, promotion }),
+    onMove: async (from, to, promotion) => {
+      // An explicit pick is honoured; with none, the server spends the cheapest card that
+      // covers the piece, which is always the one the player would have chosen.
+      const cardId = cardHand.selection() ?? undefined;
+      const ok = await net.sendMove({ from, to, promotion, cardId });
+      if (ok) cardHand.clearSelection();
+      return ok;
+    },
     onIllegal: () => sfx.illegal(),
     onPickup: () => sfx.pickup(),
     requestPromotion: promotionDialog,
@@ -83,6 +97,35 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   });
 
   const timer = new TimerRing();
+
+  /**
+   * Hovering a card previews its reach on the board without committing to it; clicking
+   * narrows the board to that card until the move is made or the pick is dropped.
+   */
+  let hoverCardId: number | null = null;
+  const applyReach = (): void => {
+    const s = getState();
+    if (!isCardsMode(s) || !isMyTurn(s)) { board.setAllowedTypes(null); return; }
+    if (hoverCardId != null) {
+      const card = s.hand?.cards.find(c => c.id === hoverCardId);
+      board.setAllowedTypes(hoverCardId === EMERGENCY_CARD_ID
+        ? new Set(['k', 'p', 'n', 'b', 'r', 'q'])
+        : card
+          ? new Set(['k', ...typesForKind(card.kind)])
+          : reachOf(s.hand));
+      return;
+    }
+    board.setAllowedTypes(cardHand.reach() ?? reachOf(s.hand));
+  };
+
+  const cardHand = new CardHand({
+    onSelect: () => { applyReach(); sfx.click(); },
+    onHover: id => { hoverCardId = id; applyReach(); },
+    onMulligan: () => { unlockAudio(); net.mulligan(); },
+    // one cue for the batch: five cards dealing in should sound like a deal, not five
+    onDeal: () => { if (getState().soundOn) sfx.cardPlay(); },
+  });
+  cardsHost.appendChild(cardHand.el);
 
   const teamHandlers = {
     onTake: async (color: Color, seatId: number) => {
@@ -124,6 +167,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   let drawWasPending = false;
   let drawRaf = 0;
   let drawHost: HTMLElement | null = null;
+  let wasCardsMode: boolean | null = null;
 
   // ---- socket side effects -------------------------------------------------
 
@@ -152,6 +196,17 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     if (getState().soundOn) {
       if (r.accepted) sfx.takebackYes(); else sfx.takebackNo();
     }
+  });
+
+  net.onHand(hand => setState({ hand }));
+
+  net.onMulliganed(e => {
+    const s = getState();
+    const mine = s.you?.seat?.color === e.color;
+    const who = e.color === 'white' ? 'White' : 'Black';
+    toast(mine ? 'New hand dealt' : `${who} took a mulligan`);
+    announce(mine ? 'You took a mulligan. New hand dealt.' : `${who} took a mulligan.`);
+    if (s.soundOn) sfx.shuffle();
   });
 
   net.onDrawResolved(() => {
@@ -214,6 +269,23 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
     board.setMarks(s.marks);
 
+    // Cards mode narrows the board to what the hand can pay for; the team game never
+    // restricts it, so the two share one board and one code path.
+    const cardsMode = isCardsMode(s);
+    if (cardsMode !== wasCardsMode) {
+      wasCardsMode = cardsMode;
+      root.querySelector('#mode-name')!.textContent = cardsMode ? 'Chess Cards' : 'Team Chess';
+      sizeBoard();
+    }
+
+    cardsHost.hidden = !cardsMode;
+    if (isCardsMode(s)) {
+      cardHand.render(s.hand, room.cards, s.you?.seat?.color ?? null);
+      applyReach();
+    } else {
+      board.setAllowedTypes(null);
+    }
+
     renderTray(trayEl, room.fen);
     renderMoves(root.querySelector<HTMLElement>('#moves')!, room.history);
     renderStats(root.querySelector<HTMLElement>('#stats')!, room);
@@ -222,6 +294,10 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     whitePanel.render(room.white, room, s.you, isHost);
     blackPanel.render(room.black, room, s.you, isHost);
     orderRosters(rosterStack, whitePanel.el, blackPanel.el, orientation(s));
+
+    // A 1v1 duel gives a seated player a team channel of exactly themselves. Spectators
+    // still have each other, so the panel stays for them and goes for the players.
+    chat.el.hidden = isCardsMode(s) && isSeated(s);
 
     const channel: ChatChannel = s.you?.seat?.color ?? 'spectator';
     chat.setChannel(channel, isSeated(s));
@@ -555,6 +631,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   return () => {
     unsub();
     timer.destroy();
+    cardHand.destroy();
     board.destroy();
     cancelAnimationFrame(tbRaf);
     cancelAnimationFrame(drawRaf);

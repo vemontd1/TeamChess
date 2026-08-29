@@ -66,11 +66,23 @@ export function toggleMotion(): MotionLevel {
   return motionLevel();
 }
 
+/**
+ * Mirror the level onto the root element, so stylesheets can act on it.
+ *
+ * This is what lets an explicit `full` choice outrank the OS reduced-motion setting: the
+ * blanket rule in theme.css is scoped to the absence of `data-motion="full"`.
+ */
+function paintRoot(): void {
+  document.documentElement.dataset.motion = motionLevel();
+}
+
 function emit(): void {
   const lvl = motionLevel();
+  paintRoot();
   for (const l of listeners) l(lvl);
 }
 
+paintRoot();
 mq.addEventListener('change', () => { if (pref === 'auto') emit(); });
 
 export function onMotionChange(fn: (level: MotionLevel) => void): () => void {

@@ -108,6 +108,10 @@ body::after {
 
 /* Text for screen readers only: live regions and the board's spoken commentary. Clipped
    rather than hidden, because display:none and visibility:hidden are not announced. */
+/* `display` set by an author rule outruns the browser's own [hidden] styling, so every
+   panel toggled with `el.hidden` needs this to actually go away. */
+[hidden] { display: none !important; }
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -147,12 +151,20 @@ h1, h2, h3 {
 *::-webkit-scrollbar-thumb:hover { background: rgba(232, 176, 75, 0.4); }
 
 /* Motion is decoration here, never information: everything below still reads with
-   animation switched off. */
+   animation switched off.
+
+   Scoped to `:root:not([data-motion="full"])` rather than bare `*`, because the app offers
+   its own override -- the E key, which the room even advertises as "press E for full fire".
+   An unconditional `!important` here made that offer a lie for everything but the fire
+   canvas, which is JS-driven and so was the only thing the toggle could still reach. The
+   OS setting remains the default; choosing full in-app is what lifts it. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  :root:not([data-motion="full"]) *,
+  :root:not([data-motion="full"]) *::before,
+  :root:not([data-motion="full"]) *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
-  body::after { display: none; }
+  :root:not([data-motion="full"]) body::after { display: none; }
 }

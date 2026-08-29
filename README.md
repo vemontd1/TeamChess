@@ -1,12 +1,18 @@
 # Bolotnoye Logovo
 
-Team chess with rotating control. Each side is a **team**; teammates take turns in order,
-and every turn runs on a countdown. Let the clock hit zero and the server plays a **random
-legal move** for you, then control passes on regardless.
+Two chess variants that both ask the same question — *can I play the move I can see?* —
+and answer it in different currencies.
+
+**Team Chess** shares one side between a **team**. Teammates take turns in order, and every
+turn runs on a countdown. Let the clock hit zero and the server plays a **random legal
+move** for you, then control passes on regardless.
+
+**Chess Cards** is one against one. You may only move a piece type you hold a card for —
+the king excepted, who is always free.
 
 Play is online — one player creates a room, everyone else joins by link.
 
-## How the rotation works
+## Team Chess: how the rotation works
 
 Each team keeps its own pointer into its roster. White plays `A1`, Black plays `B1`,
 White plays `A2`, Black plays `B2`, and so on, each team wrapping independently:
@@ -23,11 +29,59 @@ turn order:  Anna → Dmitri → Boris → Elena → Clara → Fyodor → Anna �
 Only the currently active seat can touch the board. Everyone else watches their teammate's
 clock run down.
 
+## Chess Cards
+
+You hold a hand of five. Each card names a piece type, and you may only move a piece you
+hold the card for; playing it spends it. **The king never needs a card**, so no hand can
+lock you out of the game.
+
+```
+  hand                          board
+  ┌──────┐ ┌──────┐ ┌──────┐    the knights and pawns will move
+  │ PAWN │ │KNIGHT│ │ ROOK │    the rooks will not: nothing is open for them,
+  └──────┘ └──────┘ └──────┘    so the Rook card is dead this turn
+     live     live     dead
+```
+
+One fixed 36-card deck per side, the same for both players — no deckbuilding:
+
+| Pawn | Knight | Bishop | Rook | Queen | Wild |
+|---|---|---|---|---|---|
+| 10 | 7 | 7 | 5 | 3 | 4 |
+
+A **Wild** moves anything. It is a rare universal answer, not a normal turn.
+
+**The loop.** Draw back up to five at the start of your turn, play one card, make one
+ordinary chess move. The spent card goes face up on your discard; when your deck runs out
+the discard is reshuffled into a new one. You may hold up to **seven** — past that you stop
+drawing, so a card kept back for a future threat is a card you are not replacing.
+
+**Tempo.** A capture draws you an extra card at the end of the turn. Going forward widens
+the hand that has to sustain going forward.
+
+**Soft enrage.** From the twentieth ply both sides draw to six instead of five, so the
+endgame stops hanging on a bad draw.
+
+**Nobody gets stuck.** Two safety nets, in the order they fire:
+
+- **Mulligan** — once a game, at the start of your turn, throw the whole hand away and take
+  a fresh one. You still owe a move.
+- **Emergency move** — if no card in your hand can move *anything*, a red Emergency card
+  appears in it. It moves any piece you like, and costs one card taken at random from the
+  hand you could not use anyway.
+
+So the absence of a card never mates you. Mate only ever comes out of the position.
+
+**What your opponent can see.** The size of your hand, and every card you have spent, face
+up. Never the hand itself — hands travel to one socket, not in the broadcast room state, so
+there is nothing to read in the network tab either.
+
 ## Rules and options
 
 | Setting | Effect |
 |---|---|
-| **Players per team** | 1–5 seats per side. |
+| **Game mode** | Team Chess, or Chess Cards. Cards is always 1v1 and forces a single seat per side. |
+| **Players per team** | 1–5 seats per side. Team mode only. |
 | **Seconds per move** | Fresh countdown every turn (not a cumulative chess clock). At zero the server plays a uniformly random legal move, flags it in the history, and advances the rotation — and everyone hears it blow up. |
 | **Skip empty seats** | On: the rotation closes over occupied seats only. Off: every seat keeps its slot, and an empty one resolves on the clock. |
 | **Takebacks** | The team that just moved may ask; the **opposing** active player accepts or declines. Accepting rewinds the board *and* both rotation pointers. Declining resumes the banked clock remainder, so asking cannot buy thinking time. |
@@ -78,8 +132,10 @@ deploy; the same build/start pair works on any Node host.
 ### Tests
 
 ```bash
+npm run test:unit    # the card engine, no server needed
+
 npm start            # in one shell
-npm test             # in another
+npm test             # in another: unit tests, then the socket suite
 ```
 
 `test/integration.mjs` drives real socket clients through the whole game: rotation order,
@@ -89,6 +145,18 @@ reconnect, checkmate detection, draw offers and resignations (including that a s
 do neither and that a side cannot accept its own draw), that the clock is published as a
 duration rather than only as an epoch, and that team chat and ghost marks reach the sender's
 own team and nobody else.
+
+For Chess Cards it plays both sides of a real game for thirty-odd plies, choosing only moves
+the hand can pay for, and asserts at every ply that the draw refilled to the right target,
+that a king move spent nothing and any other move spent exactly one card, that a capture
+drew its tempo card, that the hand never passed seven, and that the public count matches the
+real hand. It also checks that a card-less move is refused, that a takeback puts the exact
+hand back, that the clock's forced move is one the hand could have paid for, and that no
+card identity appears anywhere in the broadcast state.
+
+`test/cards.mjs` covers the engine directly, because the deck is shuffled and the paths that
+only open on an unlucky hand — the emergency move, a deck running dry — would otherwise go
+years without being exercised.
 
 ## Coordinating with your team
 
@@ -108,6 +176,9 @@ sending everything to everyone and asking the client to hide it.
 
 - **Drag** a piece, or **click** it and click a destination.
 - **Offer draw** and **Resign** sit under the board while you hold a seat.
+- In Chess Cards, hover a card to preview what it can move, click it to commit the board to
+  it, or just move a piece and the matching card is spent for you — the exact card before a
+  Wild, and a Wild before the emergency move. Pieces you cannot reach this turn are dimmed.
 - **F** — flip the board. **M** — mute. **E** — visual effects on/off.
 - **C** — jump to the chat box. **B** — jump back to the board.
 - The board only glows and accepts input when it is genuinely your turn.
@@ -142,12 +213,23 @@ off for performance — with it off, browsers report `prefers-reduced-motion: re
 fire stays disabled. Press **E** (or the ✦ button) to override it for this app; the choice
 is remembered.
 
+The override reaches the CSS as well as the fire canvas. The level is mirrored onto the
+root element as `data-motion`, and the blanket reduced-motion rule in `theme.css` is scoped
+to the absence of `data-motion="full"` — otherwise its `!important` would have outranked the
+very toggle the room advertises, leaving **E** able to restore only the one effect that
+happens to be drawn in JavaScript.
+
+In Chess Cards this is the difference between the Wild shimmering and sitting still. Cards
+dealing in and being spent are not affected by any of it: those are how you see the hand
+change, and hiding them would not calm the interface, only make it lie.
+
 ## Layout
 
 ```
 server/src/
   index.ts    Socket.IO event handlers, takeback resolution, team-scoped delivery
   room.ts     room model, rotation cursors, clocks, undo frames, chat, marks
+  cards.ts    Chess Cards: deck, hands, spending, the emergency move
   bots.ts     move selection — 'random' for timeouts, 'greedy' for bot seats
   types.ts    wire types (mirrored into client/src/types.ts)
 
@@ -157,14 +239,14 @@ client/src/
   net/socket.ts       typed socket wrapper, token persistence
   board/board.ts      DOM board, pointer drag, keyboard play, ARIA grid, marks
   board/pieces.ts     Staunton piece SVGs
-  ui/                 home, room, roster, timer ring, chat, widgets
+  ui/                 home, room, roster, timer ring, chat, cards, widgets
   audio/sfx.ts        WebAudio playback over the sample pack, plus synthesized cues
   styles/             theme tokens, layout, board, panels, chat
 ```
 
-Chat and marks are deliberately **not** part of `RoomState`: that object is broadcast to
-everyone in the room, so anything team-private has to travel on its own per-socket channel.
-`test/integration.mjs` asserts that the opposing team receives neither.
+Chat, marks and card hands are deliberately **not** part of `RoomState`: that object is
+broadcast to everyone in the room, so anything private has to travel on its own per-socket
+channel. `test/integration.mjs` asserts that the opposing side receives none of them.
 
 ## Credits
 

@@ -1,4 +1,4 @@
-import type { RoomState, You, ChatMessage, MarkView } from '../types';
+import type { RoomState, You, ChatMessage, MarkView, HandState } from '../types';
 
 export type Orientation = 'white' | 'black';
 
@@ -16,6 +16,10 @@ export interface AppState {
   chat: ChatMessage[];
   /** Squares your own team has flagged for the current position. */
   marks: MarkView[];
+  /** Cards mode: your own hand. Null in team mode, or if you hold no seat. */
+  hand: HandState | null;
+  /** The card you have picked to pay for your next move; null lets the server choose. */
+  selectedCardId: number | null;
 }
 
 type Listener = (s: AppState, prev: AppState) => void;
@@ -30,6 +34,8 @@ const state: AppState = {
   error: null,
   chat: [],
   marks: [],
+  hand: null,
+  selectedCardId: null,
 };
 
 const listeners = new Set<Listener>();
@@ -77,6 +83,11 @@ export function mustAnswerTakeback(s: AppState = state): boolean {
   if (!room || !you?.seat || !pending) return false;
   if (you.seat.color === pending.byColor) return false;
   return room.turn === you.seat.color && room.activeSeatId === you.seat.seatId;
+}
+
+/** True when this room is running Chess Cards rather than the team game. */
+export function isCardsMode(s: AppState = state): boolean {
+  return s.room?.config.mode === 'cards';
 }
 
 /**

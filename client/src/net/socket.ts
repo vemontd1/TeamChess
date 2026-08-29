@@ -1,7 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import type {
   RoomState, JoinResult, RoomConfig, Color, MovePayload, MoveFx, ChatMessage, MarkView,
-  GameEnded,
+  GameEnded, HandState,
 } from '../types';
 import { setState } from '../state/store';
 
@@ -77,6 +77,7 @@ export function respondTakeback(accept: boolean): void {
   sock().emit('takeback:respond', { accept });
 }
 export function resign(): void { sock().emit('game:resign'); }
+export function mulligan(): void { sock().emit('cards:mulligan'); }
 export function offerDraw(): void { sock().emit('draw:offer'); }
 export function respondDraw(accept: boolean): void {
   sock().emit('draw:respond', { accept });
@@ -115,3 +116,8 @@ export function onGameEnded(fn: (e: GameEnded) => void): void { bind('game:ended
 export function onChat(fn: (m: ChatMessage) => void): void { bind('chat:new', fn); }
 export function onChatHistory(fn: (m: ChatMessage[]) => void): void { bind('chat:history', fn); }
 export function onMarks(fn: (m: MarkView[]) => void): void { bind('mark:state', fn); }
+/** Your own hand, sent per-socket -- never part of the broadcast room state. */
+export function onHand(fn: (h: HandState | null) => void): void { bind('cards:hand', fn); }
+export function onMulliganed(fn: (e: { color: Color }) => void): void {
+  bind('cards:mulliganed', fn);
+}

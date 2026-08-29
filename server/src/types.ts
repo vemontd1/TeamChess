@@ -2,11 +2,60 @@ export type Color = 'white' | 'black';
 export type Status = 'lobby' | 'playing' | 'finished';
 export type SeatKind = 'human' | 'bot';
 
+/**
+ * `team` is the rotating-control team game. `cards` is Chess Cards: a strict 1v1 where a
+ * player may only move a piece type they hold a card for, the king excepted.
+ */
+export type GameMode = 'team' | 'cards';
+
 export interface RoomConfig {
-  teamSize: number;            // 1..5
+  mode: GameMode;
+  teamSize: number;            // 1..5, forced to 1 in cards mode
   skipEmptySeats: boolean;     // rotation only cycles occupied seats
   moveTimerSec: number | null; // per-move countdown, null = off
   allowTakeback: boolean;
+}
+
+// --- cards ---
+
+export type CardKind = 'pawn' | 'knight' | 'bishop' | 'rook' | 'queen' | 'wild';
+
+/** One card in your own hand, with whether it can actually move anything right now. */
+export interface HandCard {
+  id: number;
+  kind: CardKind;
+  playable: boolean;
+}
+
+/** What both players see of a side's cards: counts and a face-up discard, never a hand. */
+export interface CardSidePublic {
+  handCount: number;
+  deckCount: number;
+  discardCount: number;
+  mulliganUsed: boolean;
+  emergenciesUsed: number;
+  played: CardKind[];
+}
+
+export interface CardsPublic {
+  white: CardSidePublic;
+  black: CardSidePublic;
+  drawTarget: number;   // 5, or 6 once soft enrage is on
+  enraged: boolean;
+}
+
+/**
+ * Your own hand, delivered per-socket rather than in `RoomState` -- that object is
+ * broadcast to the whole room, so a hand put in it would be readable in the opponent's
+ * devtools, which in a game built on hidden information is the entire exploit.
+ */
+export interface HandState {
+  color: Color;
+  cards: HandCard[];
+  /** True when no card in hand can move anything: the safety net is offered. */
+  emergency: boolean;
+  mulliganAvailable: boolean;
+  yourTurn: boolean;
 }
 
 export interface SeatStats {
@@ -90,6 +139,8 @@ export interface RoomState {
   spectatorCount: number;
   pendingTakeback: PendingTakeback | null;
   pendingDraw: PendingDraw | null;
+  /** Null in team mode. */
+  cards: CardsPublic | null;
   config: RoomConfig;
 }
 
@@ -107,7 +158,11 @@ export interface CreatePayload { name: string; config: Partial<RoomConfig>; }
 export interface JoinPayload { roomId: string; name: string; token?: string; }
 export interface SeatTakePayload { color: Color; seatId: number; }
 export interface SeatBotPayload { color: Color; seatId: number; bot: boolean; }
-export interface MovePayload { from: string; to: string; promotion?: string; }
+export interface MovePayload {
+  from: string; to: string; promotion?: string;
+  /** Cards mode: which card pays for this move. Omitted lets the server choose. */
+  cardId?: number;
+}
 export interface TakebackRespondPayload { accept: boolean; }
 export interface DrawRespondPayload { accept: boolean; }
 export interface JoinResult {

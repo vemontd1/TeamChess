@@ -12,7 +12,7 @@ export function pieceValue(type: string): number {
 
 interface VerboseMove {
   from: string; to: string; promotion?: string;
-  captured?: string; san: string; flags: string;
+  captured?: string; san: string; flags: string; piece: string;
 }
 
 /**
@@ -24,9 +24,18 @@ interface VerboseMove {
  * 'greedy' is a one-ply material grab used by bot seats: take the most valuable hanging
  * piece, otherwise promote, otherwise check, otherwise move at random. Deliberately weak;
  * it exists to keep a rotation flowing, not to be an opponent.
+ *
+ * `allowedTypes` narrows the pool to piece types the mover can actually move. In cards
+ * mode that is the hand's reach, so a blown clock plays a move the player could have
+ * played rather than one the cards never permitted. It falls back to the full pool if the
+ * narrowing leaves nothing, which cannot happen while the king is free but costs nothing
+ * to guard.
  */
-export function pickMove(chess: Chess, style: MoveStyle): PickedMove | null {
-  const moves = chess.moves({ verbose: true }) as unknown as VerboseMove[];
+export function pickMove(chess: Chess, style: MoveStyle,
+                         allowedTypes?: Set<string>): PickedMove | null {
+  const all = chess.moves({ verbose: true }) as unknown as VerboseMove[];
+  const narrowed = allowedTypes ? all.filter(m => allowedTypes.has(m.piece)) : all;
+  const moves = narrowed.length > 0 ? narrowed : all;
   if (moves.length === 0) return null;
 
   const take = (m: VerboseMove): PickedMove => ({

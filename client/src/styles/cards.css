@@ -1,0 +1,456 @@
+/* ============================================================
+   Chess Cards — the hand, the table, and how both move
+   ============================================================
+
+   Two families of animation live here, and the effects toggle treats them differently.
+
+   Transitional — deal, spend, pick, refuse — are how the player sees the game change.
+   They fire once, they are short, and they survive every setting: turning them off would
+   not calm the interface, it would hide events.
+
+   Ambient — the Wild's shimmer, the emergency throb, the live hand's breathing — are
+   decoration that never stops on its own. Those are what `.fx-calm` slows and `.fx-off`
+   removes, and what `prefers-reduced-motion` quiets by default. */
+
+.cards-wrap {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+  --card-w: 66px;
+  --card-h: 92px;
+  /* Per-kind accent. Scarcer cards run hotter, so the deck's shape is legible on the
+     table: ten pawns are bronze, three queens are full gold. */
+  --tint: var(--text-faint);
+  --tint-soft: rgba(138, 131, 120, 0.18);
+}
+
+/* ---- the opponent's side of the table ---- */
+
+.cards-opp {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 13px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.opp-row { display: flex; align-items: center; gap: 9px; }
+.opp-label, .spent-label {
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  flex: 0 0 auto;
+  min-width: 62px;
+}
+.opp-backs { display: flex; gap: 2px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.opp-none { color: var(--text-faint); font-style: italic; }
+.opp-count {
+  font-family: var(--font-display);
+  font-size: 15px;
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+
+/* A card back reads as a card without being one: same proportion, no face. Each deals in
+   on its own beat, so an opponent drawing is motion on their side of the table rather
+   than a number quietly changing. */
+.card-back {
+  width: 13px;
+  height: 19px;
+  border-radius: 2.5px;
+  background:
+    repeating-linear-gradient(45deg,
+      rgba(232, 176, 75, 0.13) 0 2px, transparent 2px 4px),
+    linear-gradient(150deg, #2E2926, #171512);
+  border: 1px solid rgba(232, 176, 75, 0.30);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4);
+  animation: back-in 320ms var(--ease-out) backwards;
+  animation-delay: calc(var(--i) * 34ms);
+}
+
+@keyframes back-in {
+  from { opacity: 0; transform: translateY(-7px) rotate(-9deg); }
+}
+
+.spent-row { display: flex; align-items: center; gap: 9px; min-height: 20px; }
+.spent-pip {
+  width: 17px; height: 17px;
+  opacity: 0.75;
+  display: inline-block;
+  animation: pip-in 300ms var(--ease-out) backwards;
+  animation-delay: calc(var(--i) * 26ms);
+}
+.spent-pip .pc-svg { filter: none; }
+.spent-wild {
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 17px;
+  text-align: center;
+  width: 17px;
+}
+.spent-none, .spent-more { color: var(--text-faint); font-size: 11px; }
+.spent-mine .spent-pip { opacity: 0.5; }
+
+@keyframes pip-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.7); }
+}
+
+.cards-meta {
+  display: flex;
+  gap: 14px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+}
+.meta-hot { color: var(--danger); }
+
+/* ---- the line that says what the hand can do right now ---- */
+
+.cards-note {
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+  min-height: 16px;
+  transition: color var(--dur-ui) var(--ease-out);
+}
+.note-live { color: var(--text-dim); }
+.note-emergency { color: var(--danger); font-weight: 500; }
+
+/* ---- the hand ---- */
+
+.cards-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cards-hand {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  min-height: calc(var(--card-h) + 10px);
+  padding-top: 10px;          /* headroom for the lift, so a raised card is not clipped */
+  perspective: 900px;         /* the deal arrives with a real tilt, not a flat slide */
+}
+
+.card {
+  position: relative;
+  width: var(--card-w);
+  height: var(--card-h);
+  flex: 0 0 auto;
+  padding: 8px 4px 7px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: 7px;
+  border: 1px solid var(--tint-soft);
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(255, 255, 255, 0.06), transparent 60%),
+    linear-gradient(168deg, #2B2621 0%, #211D1A 45%, #171512 100%);
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  overflow: hidden;
+  transform-origin: 50% 100%;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition:
+    transform 260ms var(--ease-out),
+    border-color var(--dur-ui) var(--ease-out),
+    box-shadow var(--dur-ui) var(--ease-out),
+    opacity var(--dur-ui) var(--ease-out),
+    filter var(--dur-ui) var(--ease-out),
+    color var(--dur-ui) var(--ease-out);
+}
+
+/* the inner hairline, which is what makes it read as printed stock rather than a button */
+.card::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  pointer-events: none;
+}
+
+/* The corner mark. A real card mirrors it bottom-right as well, but at 66px wide that
+   corner belongs to the name plate and the two collided; one mark plus the plate is
+   already enough to read as a card. */
+.card-pip {
+  position: absolute;
+  top: 5px; left: 6px;
+  font-family: var(--font-display);
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--tint);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.card-art {
+  width: 46px; height: 46px;
+  display: block;
+  margin-bottom: 9px;   /* clear the name plate */
+  transition: transform 260ms var(--ease-out);
+}
+.card-art .pc-svg {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55))
+          drop-shadow(0 0 9px var(--tint-soft));
+}
+
+.card-glyph {
+  font-size: 28px;
+  line-height: 46px;
+  color: var(--tint);
+  text-shadow: 0 0 14px var(--tint-soft);
+}
+
+.card-name {
+  position: absolute;
+  left: 3px; right: 3px; bottom: 3px;
+  padding: 3px 2px;
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  max-width: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-top: 1px solid var(--tint-soft);
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.30));
+  border-radius: 0 0 5px 5px;
+}
+
+/* The sheen: a diagonal highlight parked off the left edge, swept across on hover. It is
+   one element rather than a background animation so it can be clipped by the card. */
+.card-sheen {
+  position: absolute;
+  top: -60%; bottom: -60%;
+  left: -140%;
+  width: 55%;
+  pointer-events: none;
+  background: linear-gradient(100deg,
+    transparent, rgba(255, 255, 255, 0.16) 45%, rgba(255, 255, 255, 0.24) 50%,
+    rgba(255, 255, 255, 0.16) 55%, transparent);
+  transform: rotate(8deg);
+}
+
+/* ---- scarcity: the accent each kind runs on ---- */
+
+.card-pawn   { --tint: #9C8F7A; --tint-soft: rgba(156, 143, 122, 0.20); }
+.card-knight { --tint: #B39257; --tint-soft: rgba(179, 146, 87, 0.22); }
+.card-bishop { --tint: #B39257; --tint-soft: rgba(179, 146, 87, 0.22); }
+.card-rook   { --tint: #CBA255; --tint-soft: rgba(203, 162, 85, 0.26); }
+.card-queen  { --tint: #E8B04B; --tint-soft: rgba(232, 176, 75, 0.34); }
+.card-wild   { --tint: #E8B04B; --tint-soft: rgba(232, 176, 75, 0.42); }
+.card-emergency { --tint: #D4553F; --tint-soft: rgba(212, 85, 63, 0.42); }
+
+.card-queen, .card-wild {
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(232, 176, 75, 0.13), transparent 62%),
+    linear-gradient(168deg, #322920 0%, #241E18 45%, #181411 100%);
+}
+
+.card-emergency {
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(212, 85, 63, 0.20), transparent 62%),
+    linear-gradient(168deg, #3A211E 0%, #281715 45%, #1C1210 100%);
+  border-color: rgba(212, 85, 63, 0.55);
+}
+/* "Emergency" is twice the length of any card name and must still fit the same card. */
+.card-emergency .card-name { font-size: 7.5px; letter-spacing: 0.03em; }
+
+/* ---- states ---- */
+
+.card:hover:not(.card-dead):not(.card-spent) {
+  transform: translateY(-7px);
+  border-color: var(--tint);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+.card:hover:not(.card-dead) .card-art { transform: scale(1.07); }
+.card:hover:not(.card-dead):not(.card-spent) .card-sheen {
+  animation: card-sweep 620ms var(--ease-out);
+}
+
+.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* The picked card is lifted and lit, and the board is narrowed to it while it stays so. */
+.card-on,
+.card-on:hover {
+  transform: translateY(-13px);
+  border-color: var(--tint);
+  box-shadow:
+    0 0 0 1px var(--tint),
+    0 16px 26px rgba(0, 0, 0, 0.55),
+    0 0 30px var(--tint-soft);
+  color: var(--text);
+}
+.card-on .card-art { transform: scale(1.1); }
+.card-on .card-sheen {
+  left: 0;
+  width: 100%;
+  top: 0; bottom: 0;
+  transform: none;
+  background: radial-gradient(90% 60% at 50% 100%, var(--tint-soft), transparent 70%);
+}
+
+/* Dead: no legal move exists for it in this position. Still readable, plainly not live --
+   it sits back down in the hand rather than standing with the others. */
+/* Sunk back into the hand and drained of colour, but still legible: knowing which dead
+   cards you are holding is how you plan the turn after this one. */
+.card-dead {
+  opacity: 0.46;
+  cursor: not-allowed;
+  filter: saturate(0.15) brightness(0.9);
+  transform: translateY(5px) scale(0.95);
+}
+.card-dead .card-sheen { display: none; }
+
+/* clicking a dead card: a short refusal, so the click is answered rather than ignored */
+.card-nope { animation: card-nope 320ms var(--ease-out); }
+
+@keyframes card-nope {
+  0%, 100% { transform: translateY(5px) scale(0.95); }
+  25%      { transform: translateY(5px) scale(0.95) translateX(-4px); }
+  60%      { transform: translateY(5px) scale(0.95) translateX(3px); }
+}
+
+/* ---- transitional: dealing in, and being spent ---- */
+
+.card-dealt {
+  animation: card-deal 760ms var(--ease-out) backwards;
+  animation-delay: var(--deal-delay, 0ms);
+}
+
+@keyframes card-deal {
+  from {
+    opacity: 0;
+    transform: translate3d(110px, -56px, 0) rotateY(52deg) rotateZ(14deg) scale(0.82);
+    box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  }
+  60% { opacity: 1; }
+  /* the glow outlasts the movement, so the new card is still identifiable once the hand
+     has settled and you are deciding what to do with it */
+  72% {
+    opacity: 1;
+    transform: none;
+    box-shadow: 0 0 0 1px var(--tint), 0 0 26px var(--tint-soft);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+}
+
+/* Spent: up off the table and away, and the card's own width collapses as it goes so the
+   hand closes the gap instead of snapping shut when the element is finally removed. */
+.card-spent {
+  pointer-events: none;
+  animation: card-spend 420ms var(--ease-in-out) forwards;
+}
+
+@keyframes card-spend {
+  0%   { transform: translateY(0) scale(1) rotate(0deg); opacity: 1; }
+  30%  { transform: translateY(-30px) scale(1.06) rotate(-5deg); opacity: 1; }
+  100% {
+    transform: translateY(-74px) scale(0.62) rotate(-13deg);
+    opacity: 0;
+    width: 0;
+    min-width: 0;
+    margin-left: -8px;
+    padding-left: 0;
+    padding-right: 0;
+    border-width: 0;
+  }
+}
+
+@keyframes card-sweep {
+  from { left: -140%; }
+  to   { left: 190%; }
+}
+
+/* ---- ambient: only while the effects toggle allows it ---- */
+
+/* The Wild is the deck's one universal answer, so it is the one card that never sits
+   still -- a slow highlight crossing the face, roughly every four seconds. */
+.card-wild:not(.card-dead) .card-sheen {
+  animation: card-sweep 2600ms var(--ease-in-out) infinite;
+  animation-delay: 1200ms;
+}
+
+.card-emergency {
+  animation: card-throb 1500ms var(--ease-in-out) infinite;
+}
+
+@keyframes card-throb {
+  0%, 100% { box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45), 0 0 0 rgba(212, 85, 63, 0); }
+  50%      { box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45), 0 0 22px rgba(212, 85, 63, 0.55); }
+}
+
+/* the hand breathes very slightly while the turn is yours, and stills when it is not */
+.hand-live .cards-hand { animation: hand-breathe 4200ms var(--ease-in-out) infinite; }
+
+@keyframes hand-breathe {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-2px); }
+}
+
+.cards-wrap:not(.hand-live) .card { filter: saturate(0.55) brightness(0.86); }
+.cards-wrap:not(.hand-live) .card:hover { transform: none; }
+
+/* The OS reduced-motion setting already resolves to `calm` in state/motion.ts, so these
+   two blocks are the whole story -- there is no separate media query to keep in step. */
+
+/* calm: keep every one-shot, slow the loops right down and drop the throb's brightness */
+.fx-calm .card-wild:not(.card-dead) .card-sheen {
+  animation-duration: 6000ms;
+  animation-delay: 3000ms;
+}
+.fx-calm .card-emergency { animation-duration: 3200ms; }
+.fx-calm.hand-live .cards-hand { animation: none; }
+
+/* off: the loops go entirely; deal and spend stay, because they are events */
+.fx-off .card-wild .card-sheen,
+.fx-off .card-back { animation: none; }
+.fx-off .card-emergency { animation: none; box-shadow: 0 0 0 1px var(--tint); }
+.fx-off.hand-live .cards-hand { animation: none; }
+
+/* ---- the piece a card cannot reach ---- */
+
+.pc-out-of-reach { opacity: 0.32; }
+.pc-out-of-reach .pc-svg {
+  filter: saturate(0.2) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+
+.card-mulligan { align-self: center; }
+
+@media (max-width: 640px) {
+  .cards-wrap { --card-w: 56px; --card-h: 80px; }
+  .card-art { width: 32px; height: 32px; }
+  .card-glyph { font-size: 21px; line-height: 32px; }
+}
+
+/* ---- home: the mode picker ---- */
+
+.mode-blurb {
+  margin: -4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}

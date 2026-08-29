@@ -4,6 +4,7 @@ import './styles/controls.css';
 import './styles/board.css';
 import './styles/panels.css';
 import './styles/chat.css';
+import './styles/cards.css';
 import './styles/turn.css';
 
 import { renderHome } from './ui/home';

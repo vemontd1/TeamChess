@@ -45,6 +45,11 @@ export class Board {
   private orient: Orientation = 'white';
   private interactive = false;
   private myColor: 'w' | 'b' | null = null;
+  /**
+   * Cards mode: the piece types this player may move right now. Null means no restriction,
+   * which is every board in the team game.
+   */
+  private allowedTypes: Set<string> | null = null;
 
   private selected: string | null = null;
   private legalTargets = new Set<string>();
@@ -226,6 +231,44 @@ export class Board {
   }
 
   /**
+   * Narrow which of your own pieces can be picked up, by piece type.
+   *
+   * This is how a card reaches the board: hold only a Knight and the knights are the only
+   * thing that lifts. Passing null removes the restriction. The pieces you cannot move are
+   * dimmed rather than hidden -- they are still yours, and reading the whole position is
+   * most of the game.
+   */
+  setAllowedTypes(types: Set<string> | null): void {
+    const same = types === this.allowedTypes
+      || (types != null && this.allowedTypes != null
+          && types.size === this.allowedTypes.size
+          && [...types].every(x => this.allowedTypes!.has(x)));
+    if (same) return;
+    this.allowedTypes = types;
+    if (this.selected && !this.canMove(this.selected)) this.clearSelection();
+    this.paintReach();
+    this.renderMarkers();
+  }
+
+  /** Whether the piece on a square is one this player may move at this moment. */
+  private canMove(square: string): boolean {
+    const piece = this.pieces.get(square);
+    if (!piece) return false;
+    if (this.myColor && piece.code[0] !== this.myColor) return false;
+    return this.allowedTypes == null || this.allowedTypes.has(piece.code[1]);
+  }
+
+  /** Dim your own pieces that the current card cannot reach. */
+  private paintReach(): void {
+    const restricted = this.allowedTypes != null && this.interactive;
+    for (const [, p] of this.pieces) {
+      const mine = !this.myColor || p.code[0] === this.myColor;
+      const reachable = !restricted || !mine || this.allowedTypes!.has(p.code[1]);
+      p.el.classList.toggle('pc-out-of-reach', !reachable && mine);
+    }
+  }
+
+  /**
    * Squares your teammates have flagged. Returns what changed so the caller can decide
    * whether to make a noise about it -- the marks are re-pushed on every state broadcast,
    * and re-announcing an unchanged set would be unbearable.
@@ -309,6 +352,7 @@ export class Board {
     }
 
     this.clearSelection();
+    this.paintReach();
     this.renderMarkers();
   }
 
@@ -375,7 +419,7 @@ export class Board {
   private selectSquare(square: string): void {
     const piece = this.pieces.get(square);
     if (!piece || !this.interactive) return;
-    if (this.myColor && piece.code[0] !== this.myColor) return;
+    if (!this.canMove(square)) return;
     this.selected = square;
     this.legalTargets.clear();
     const moves = this.chess.moves({ square: square as never, verbose: true }) as unknown as
@@ -450,6 +494,10 @@ export class Board {
     const piece = this.pieces.get(square);
     if (!piece || (this.myColor && piece.code[0] !== this.myColor)) {
       this.say(piece ? 'That is not your piece' : 'No piece there');
+      return;
+    }
+    if (!this.canMove(square)) {
+      this.say(`${describe(square, piece.code)}. You hold no card for that piece.`);
       return;
     }
 
@@ -537,7 +585,8 @@ export class Board {
     }
 
     const piece = this.pieces.get(square);
-    if (!piece || (this.myColor && piece.code[0] !== this.myColor)) {
+    if (!piece || !this.canMove(square)) {
+      if (piece && this.myColor && piece.code[0] === this.myColor) this.cb.onIllegal();
       this.clearSelection();
       this.renderMarkers();
       return;
