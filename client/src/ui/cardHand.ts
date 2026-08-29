@@ -20,6 +20,12 @@ const KIND_PIP: Record<CardKind, string> = {
   pawn: 'P', knight: 'N', bishop: 'B', rook: 'R', queen: 'Q', wild: '★',
 };
 
+/** How a kind reads when the piece is spoken of as a group. */
+const KIND_PLURAL: Record<CardKind, string> = {
+  pawn: 'pawns', knight: 'knights', bishop: 'bishops', rook: 'rooks', queen: 'queens',
+  wild: 'pieces',
+};
+
 /** Hand order, so a drawn card slots into place instead of landing wherever. */
 const KIND_ORDER: CardKind[] = ['pawn', 'knight', 'bishop', 'rook', 'queen', 'wild'];
 
@@ -241,6 +247,15 @@ export class CardHand {
         'No card in your hand can move anything — take the emergency move.');
       return;
     }
+    // A card swapped out for a piece you no longer own is a rule the player cannot see
+    // happening, so it says so on the turn it happens rather than leaving them to notice
+    // a card they were holding has quietly become a different one.
+    if (hand.replaced.length > 0) {
+      const kinds = [...new Set(hand.replaced)].map(k => KIND_PLURAL[k]);
+      set('note-swap', `No ${listOf(kinds)} left on the board — `
+        + `${hand.replaced.length > 1 ? 'those cards were' : 'that card was'} replaced.`);
+      return;
+    }
     set('note-live', 'Play a card, or just move — the matching card is spent.');
   }
 
@@ -386,6 +401,12 @@ export class CardHand {
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
   }
+}
+
+/** "knights", "knights and rooks", "knights, rooks and queens". */
+function listOf(words: string[]): string {
+  if (words.length <= 1) return words[0] ?? '';
+  return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 }
 
 /** The face-up record of what a side has spent, newest last, oldest folded into a count. */

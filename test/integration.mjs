@@ -546,6 +546,10 @@ async function main() {
 
   const affordable = legal.find(m => myReach.has(m.piece) && m.piece !== 'k');
   const spentBefore = cw.last.cards.white.played.length;
+  // A hand of three can open dead -- eight bishops, five rooks and three queens are all
+  // unplayable from the starting position -- in which case this move is paid for by the
+  // emergency, which discards at random and so says nothing about what moved.
+  const openedDead = cw.hand.emergency;
   const okAfford = await emitCb(cw, 'game:move',
     { from: affordable.from, to: affordable.to });
   await sleep(150);
@@ -553,10 +557,17 @@ async function main() {
   check('it spent exactly one card',
     cw.last.cards.white.played.length === spentBefore + 1,
     JSON.stringify(cw.last.cards.white.played));
-  check('the spent card covered the piece that moved', (() => {
-    const k = cw.last.cards.white.played[spentBefore];
-    return k === 'wild' || CARD_PIECE[k] === affordable.piece;
-  })(), `${cw.last.cards.white.played[spentBefore]} for ${affordable.piece}`);
+  check(openedDead
+      ? 'an emergency move paid with a card taken at random'
+      : 'the spent card covered the piece that moved',
+    openedDead
+      ? cw.last.cards.white.emergenciesUsed === 1
+      : (() => {
+          const k = cw.last.cards.white.played[spentBefore];
+          return k === 'wild' || CARD_PIECE[k] === affordable.piece;
+        })(),
+    `${cw.last.cards.white.played[spentBefore]} for ${affordable.piece}`
+    + `${openedDead ? ' (emergency)' : ''}`);
   check('the opponent sees a card was spent, not which one left the hand',
     cbk.last.cards.white.handCount === HAND - 1,
     String(cbk.last.cards.white.handCount));
@@ -742,6 +753,88 @@ async function main() {
     JSON.stringify(tmc.last.config));
   check('a team room keeps its roster size', tmc.last.config.teamSize === 3);
   check('a team room deals no cards', tmc.last.cards === null);
+
+  log('\n=== 23. Chess Cards: a card outlives its piece for exactly one turn ===');
+  // Play a long game that takes every capture it can, so pieces actually come off the
+  // board, and assert the thing that was broken: nobody is ever left holding a card for a
+  // piece type they no longer own.
+  const sw1 = await mkClient('Swap-W');
+  const ridS = await emitCb(sw1, 'room:create',
+    { name: 'S', config: { mode: 'cards', moveTimerSec: 120 } });
+  const sw2 = await mkClient('Swap-B');
+  for (const c of [sw1, sw2]) await join(c, ridS);
+  await emitCb(sw1, 'seat:take', { color: 'white', seatId: 0 });
+  await emitCb(sw2, 'seat:take', { color: 'black', seatId: 0 });
+  sw1.emit('game:start');
+  await waitFor(sw1, s => s.status === 'playing');
+  await sleep(200);
+
+  /** Piece types this colour has none of left on the board. */
+  const extinctFor = (fen, color) => {
+    const mine = color === 'white' ? 'w' : 'b';
+    const alive = new Set();
+    for (const row of new Chess(fen).board()) {
+      for (const cell of row) if (cell && cell.color === mine) alive.add(cell.type);
+    }
+    return new Set(['p', 'n', 'b', 'r', 'q'].filter(t => !alive.has(t)));
+  };
+
+  const bySide = { white: sw1, black: sw2 };
+  let heldDead = null, swapsSeen = 0, extinctionsSeen = 0, replacedKinds = new Set();
+
+  for (let ply = 0; ply < 90 && sw1.last.status === 'playing'; ply++) {
+    const st = sw1.last;
+    const color = st.turn;
+    const me = bySide[color];
+    const hand = me.hand;
+    if (!hand?.yourTurn) break;
+
+    const gone = extinctFor(st.fen, color);
+    if (gone.size > 0) extinctionsSeen++;
+    if (hand.replaced.length > 0) {
+      swapsSeen++;
+      for (const k of hand.replaced) replacedKinds.add(k);
+    }
+
+    // the invariant: nothing in hand names a piece this side no longer has
+    const stranded = hand.cards.filter(
+      c => c.kind !== 'wild' && gone.has(CARD_PIECE[c.kind]));
+    if (stranded.length > 0) {
+      // only a violation if a better card existed to swap in
+      heldDead = `${color} held ${stranded.map(c => c.kind).join(',')} `
+        + `with ${[...gone].join('')} extinct at ply ${st.history.length}`;
+      break;
+    }
+
+    const g = new Chess(st.fen);
+    const r = reach(hand);
+    const options = g.moves({ verbose: true }).filter(m => r.has(m.piece));
+    if (options.length === 0) break;
+    const pick = options.find(m => m.captured) ?? options[0];
+    const ok = await emitCb(me, 'game:move',
+      { from: pick.from, to: pick.to, promotion: pick.promotion });
+    if (!ok) break;
+    await sleep(70);
+  }
+
+  check('a long game reached at least one extinct piece type', extinctionsSeen > 0,
+    `${extinctionsSeen} turns with something extinct`);
+  check('no player was ever left holding a card for a piece they no longer own',
+    heldDead === null, heldDead ?? '');
+  check('the swap was reported to the player who got it', swapsSeen > 0,
+    `${swapsSeen} turns reported a swap (${[...replacedKinds].join(',') || 'none'})`);
+  check('a swap is never recorded as a card played on a move', (() => {
+    const c = sw1.last.cards.white;
+    // every entry in `played` came from a move or an emergency, never from a swap
+    return c.played.length <= sw1.last.history.filter(h => h.color === 'white').length
+      + c.emergenciesUsed;
+  })(), JSON.stringify({ played: sw1.last.cards.white.played.length,
+    plies: sw1.last.history.filter(h => h.color === 'white').length,
+    emerg: sw1.last.cards.white.emergenciesUsed }));
+  check('the deck is still thirty-six after all the churn', (() => {
+    const c = sw1.last.cards.white;
+    return c.handCount + c.deckCount + c.discardCount === 36;
+  })(), JSON.stringify(sw1.last.cards.white));
 
   log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);
   process.exit(failures === 0 ? 0 : 1);

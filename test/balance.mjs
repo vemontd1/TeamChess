@@ -20,12 +20,17 @@
  */
 import { Chess } from 'chess.js';
 import {
-  TUNING, createCards, drawUpTo, drawBonus, drawTargetFor,
+  TUNING, createCards, drawUpTo, drawBonus, drawTargetFor, extinctTypes, replaceExtinct,
   resolveSpend, commitSpend, cardPlayable, cardCovers,
 } from '../server/src/cards.ts';
 
+/** Set BALANCE_NO_SWAP=1 to measure without the extinct-card replacement, for comparison. */
+const SWAP = process.env.BALANCE_NO_SWAP !== '1';
+
 const GAMES = Number(process.env.GAMES ?? 120);
 const MAX_PLIES = Number(process.env.MAX_PLIES ?? 60);
+
+const CARD_PIECE_T = { pawn: 'p', knight: 'n', bishop: 'b', rook: 'r', queen: 'q' };
 
 /** Piece types this hand can pay for, king included -- he is always free. */
 function reach(side, movable) {
@@ -41,6 +46,9 @@ function simulate() {
   const s = {
     turns: 0, open: 0, moveCov: 0, typeCov: 0, emergency: 0, wild: 0,
     distinct: 0, handSize: 0, stuckToKing: 0, plies: 0, games: 0,
+    swapped: 0, swapTurns: 0, deadHeld: 0,
+    lateTurns: 0, lateOpen: 0, lateMoveCov: 0, lateTypeCov: 0,
+    lateEmergency: 0, lateDead: 0, lateSwap: 0,
   };
 
   for (let g = 0; g < GAMES; g++) {
@@ -56,6 +64,11 @@ function simulate() {
       // runtime, so it is generated once here and the movable-type set derived from it,
       // rather than letting movableTypes/refreshEmergency each regenerate it.
       drawUpTo(side, drawTargetFor(ply));
+      if (SWAP) {
+        const swapped = replaceExtinct(side, extinctTypes(chess, color));
+        s.swapped += swapped.length;
+        if (swapped.length > 0) { s.swapTurns++; if (ply >= 50) s.lateSwap++; }
+      }
 
       const legal = chess.moves({ verbose: true });
       if (legal.length === 0) break;
@@ -67,11 +80,26 @@ function simulate() {
 
       s.turns++;
       s.plies++;
-      if (affordable.length === legal.length) s.open++;
+      // "late" is from ply 50: pieces have started coming off, which is when a card for a
+      // piece you no longer own stops being a rarity and starts being most of your hand
+      const late = ply >= 50;
+      if (late) s.lateTurns++;
+      if (affordable.length === legal.length) { s.open++; if (late) s.lateOpen++; }
       s.moveCov += affordable.length / legal.length;
       s.typeCov += [...movable].filter(t => r.has(t)).length / movable.size;
+      if (late) {
+        s.lateMoveCov += affordable.length / legal.length;
+        s.lateTypeCov += [...movable].filter(t => r.has(t)).length / movable.size;
+        if (side.emergency) s.lateEmergency++;
+      }
       if (side.emergency) s.emergency++;
       if (side.hand.some(c => c.kind === 'wild')) s.wild++;
+      // cards held for a piece that no longer exists: dead weight, not a constraint
+      const goneNow = extinctTypes(chess, color);
+      const deadNow = side.hand.filter(
+        c => c.kind !== 'wild' && goneNow.has(CARD_PIECE_T[c.kind])).length;
+      s.deadHeld += deadNow;
+      if (late) s.lateDead += deadNow;
       s.distinct += new Set(side.hand.map(c => c.kind)).size;
       s.handSize += side.hand.length;
       // the pinch that actually hurts: the only thing you may move is the king
@@ -95,6 +123,17 @@ function simulate() {
     stuckToKing: per(s.stuckToKing),
     distinct: per(s.distinct),
     handSize: per(s.handSize),
+    swapTurns: per(s.swapTurns),
+    deadHeld: per(s.deadHeld),
+    late: s.lateTurns === 0 ? null : {
+      open: s.lateOpen / s.lateTurns,
+      moveCov: s.lateMoveCov / s.lateTurns,
+      typeCov: s.lateTypeCov / s.lateTurns,
+      emergency: s.lateEmergency / s.lateTurns,
+      deadHeld: s.lateDead / s.lateTurns,
+      swapTurns: s.lateSwap / s.lateTurns,
+      turns: s.lateTurns,
+    },
   };
 }
 
@@ -110,15 +149,17 @@ const num = x => x.toFixed(2).padStart(5);
 function row(name, r) {
   console.log(
     `  ${name.padEnd(30)} ${pct(r.open)} ${pct(r.moveCov)} ${pct(r.typeCov)} `
-    + `${pct(r.emergency)} ${pct(r.wild)} ${pct(r.stuckToKing)} ${num(r.distinct)} ${num(r.handSize)}`);
+    + `${pct(r.emergency)} ${pct(r.wild)} ${pct(r.stuckToKing)} ${num(r.distinct)} `
+    + `${num(r.handSize)} ${pct(r.swapTurns)} ${num(r.deadHeld)}`);
 }
 
 function header() {
   console.log(
     `  ${'tuning'.padEnd(30)} ${'open'.padStart(6)} ${'moves'.padStart(6)} `
     + `${'types'.padStart(6)} ${'emerg'.padStart(6)} ${'wild'.padStart(6)} `
-    + `${'king'.padStart(6)} ${'kinds'.padStart(5)} ${'hand'.padStart(5)}`);
-  console.log(`  ${'-'.repeat(30)} ------ ------ ------ ------ ------ ------ ----- -----`);
+    + `${'king'.padStart(6)} ${'kinds'.padStart(5)} ${'hand'.padStart(5)} `
+    + `${'swap'.padStart(6)} ${'dead'.padStart(5)}`);
+  console.log(`  ${'-'.repeat(30)} ------ ------ ------ ------ ------ ------ ----- ----- ------ -----`);
 }
 
 const D = {
@@ -155,5 +196,13 @@ if (process.argv.includes('--all')) {
   for (const [name, patch] of CANDIDATES) row(name, withTuning(patch, simulate));
   console.log();
 }
-row('SHIPPED', simulate());
+const shipped = simulate();
+row('SHIPPED', shipped);
+if (shipped.late) {
+  const L = shipped.late;
+  console.log(`
+  From ply 50 on (${L.turns} turns) — where pieces have come off the board:`);
+  console.log(`    open ${pct(L.open)}   moves ${pct(L.moveCov)}   types ${pct(L.typeCov)}`
+    + `   emerg ${pct(L.emergency)}   swap ${pct(L.swapTurns)}   dead ${num(L.deadHeld)}`);
+}
 console.log();

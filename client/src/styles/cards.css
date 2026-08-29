@@ -119,6 +119,8 @@
 }
 .note-live { color: var(--text-dim); }
 .note-emergency { color: var(--danger); font-weight: 500; }
+/* A swap is news, not a warning: the accent rather than the danger colour. */
+.note-swap { color: var(--accent); }
 
 /* ---- the hand ---- */
 

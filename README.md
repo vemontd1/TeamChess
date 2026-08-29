@@ -63,6 +63,13 @@ the hand that has to sustain going forward.
 **Soft enrage.** From the twentieth ply both sides draw to four instead of three, so the
 endgame stops hanging on a bad draw.
 
+**A card cannot outlive its piece.** Trade off both knights and any Knight cards you are
+holding are swapped for fresh ones at the start of your next turn — they go back to the
+discard, so promoting a pawn to a knight makes them meaningful again. Being unable to move
+the bishop you *have* is a position to solve; holding a card for a bishop that no longer
+exists is just a smaller hand. Only extinction triggers this, never a piece that is merely
+blocked.
+
 **Nobody gets stuck.** Two safety nets, in the order they fire:
 
 - **Mulligan** — once a game, at the start of your turn, throw the whole hand away and take

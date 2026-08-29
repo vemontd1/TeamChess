@@ -56,6 +56,11 @@ export interface HandState {
   emergency: boolean;
   mulliganAvailable: boolean;
   yourTurn: boolean;
+  /**
+   * Kinds swapped out at the start of this turn because that piece is gone from the
+   * board. Reported so the swap can be explained rather than just happening.
+   */
+  replaced: CardKind[];
 }
 
 export interface SeatStats {

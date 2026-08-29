@@ -12,7 +12,8 @@ import { Chess } from 'chess.js';
 import {
   TUNING, deckSize, createCards, drawUpTo, drawBonus, drawTargetFor, isEnraged,
   movableTypes, cardPlayable, cardCovers, refreshEmergency, resolveSpend, commitSpend,
-  mulligan, cardsPublic, handView, snapshotCards, EMERGENCY_CARD_ID,
+  mulligan, cardsPublic, handView, snapshotCards, extinctTypes, replaceExtinct,
+  EMERGENCY_CARD_ID,
 } from '../server/src/cards.ts';
 
 /* Assertions read the tuning rather than restating it, so retuning the mode does not
@@ -36,7 +37,17 @@ function handOf(...kinds) {
 function bareSide(...kinds) {
   return {
     hand: handOf(...kinds), deck: [], discard: [], mulliganUsed: false,
-    played: [], emergenciesUsed: 0, emergency: false,
+    played: [], emergenciesUsed: 0, emergency: false, lastReplaced: [],
+  };
+}
+
+/** A side with a hand and a stocked deck, for the replacement tests. */
+function stockedSide(hand, deck) {
+  return {
+    hand: handOf(...hand),
+    deck: deck.map((kind, i) => ({ id: 2000 + i, kind })),
+    discard: [], mulliganUsed: false,
+    played: [], emergenciesUsed: 0, emergency: false, lastReplaced: [],
   };
 }
 
@@ -218,6 +229,75 @@ check('and its own played record',
 check('the card objects are copies, not shared references',
   snap.white.deck[0] !== original.white.deck[0]
   && snap.white.deck[0].id === original.white.deck[0].id);
+
+log('=== 12. Cards for pieces you no longer have are replaced ===');
+// A blocked bishop is a position to solve; a card for a bishop that no longer exists is
+// just a smaller hand. Only the second is swapped out.
+const KINGS_ONLY = '4k3/8/8/8/8/8/8/4K3 w - - 0 1';
+const NO_KNIGHTS = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/R1BQKB1R w KQkq - 0 1';
+
+const openBoard = new Chess();
+check('nothing is extinct in the opening position',
+  extinctTypes(openBoard, 'white').size === 0,
+  [...extinctTypes(openBoard, 'white')].join(''));
+
+const knightless = new Chess(NO_KNIGHTS);
+const gone = extinctTypes(knightless, 'white');
+check('a side with both knights traded has knights extinct',
+  gone.size === 1 && gone.has('n'), [...gone].join(''));
+check("and the opponent's knights are not this side's business",
+  extinctTypes(knightless, 'black').size === 0);
+
+const bare = new Chess(KINGS_ONLY);
+check('a bare king has every piece type extinct',
+  extinctTypes(bare, 'white').size === 5, [...extinctTypes(bare, 'white')].join(''));
+
+const swap = stockedSide(['knight', 'pawn', 'knight'], ['rook', 'pawn', 'bishop']);
+const out = replaceExtinct(swap, gone);
+check('both knight cards were swapped out', out.length === 2 && out.every(k => k === 'knight'),
+  out.join(','));
+check('the hand is still the same size', swap.hand.length === 3, String(swap.hand.length));
+check('and holds no knights any more',
+  !swap.hand.some(c => c.kind === 'knight'), swap.hand.map(c => c.kind).join(','));
+check('the pawn card that was already there was left alone',
+  swap.hand.some(c => c.id === 1001));
+check('the retired cards went to the discard',
+  swap.discard.length === 2 && swap.discard.every(c => c.kind === 'knight'));
+check('a swap is not recorded as a card played on a move',
+  swap.played.length === 0, JSON.stringify(swap.played));
+check('no card was created or lost',
+  swap.hand.length + swap.deck.length + swap.discard.length === 6,
+  String(swap.hand.length + swap.deck.length + swap.discard.length));
+
+const untouched = stockedSide(['bishop', 'rook'], ['pawn', 'pawn']);
+check('nothing is swapped when nothing is extinct',
+  replaceExtinct(untouched, new Set()).length === 0 && untouched.deck.length === 2);
+
+// A card that is merely blocked stays: that is the game, not a dead card.
+const blocked = stockedSide(['rook', 'rook'], ['pawn']);
+check('a card for a piece that exists but cannot move is kept',
+  replaceExtinct(blocked, extinctTypes(openBoard, 'white')).length === 0
+  && blocked.hand.every(c => c.kind === 'rook'));
+
+// The deck can be as dead as the hand; churning it would achieve nothing.
+const allDead = stockedSide(['knight', 'knight'], ['knight', 'knight']);
+check('no swap happens when the deck holds nothing better',
+  replaceExtinct(allDead, gone).length === 0 && allDead.hand.length === 2);
+
+const bareKing = stockedSide(['wild', 'queen'], ['wild', 'rook']);
+check('a bare king churns nothing, wild included',
+  replaceExtinct(bareKing, extinctTypes(bare, 'white')).length === 0);
+
+const wildKept = stockedSide(['wild', 'knight'], ['pawn']);
+const wildOut = replaceExtinct(wildKept, gone);
+check('a wild survives while any piece remains',
+  wildOut.length === 1 && wildOut[0] === 'knight'
+  && wildKept.hand.some(c => c.kind === 'wild'), wildOut.join(','));
+
+const snapped = createCards();
+snapped.white.lastReplaced = ['knight'];
+check('the snapshot carries the replacement record',
+  snapshotCards(snapped).white.lastReplaced[0] === 'knight');
 
 log(`\n${failures === 0 ? 'ALL CARD CHECKS PASSED' : `${failures} CARD CHECK(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

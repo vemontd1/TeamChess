@@ -82,6 +82,39 @@ net opens about once every forty turns.
 | **Wild** | **4** | **1** |
 | Deck total | 36 | 36 |
 
+## A card cannot outlive its piece
+
+A second playtest note:
+
+> There is a bug where when we ran out of pieces, for example knights, we still have those
+> cards on hand. It makes sense to replace them.
+
+A card for a piece type you no longer own is not dead in *this* position — it is dead in
+every position that can follow, so it is not a constraint at all, just a smaller hand.
+Cards for extinct types are now swapped out at the start of the turn.
+
+The averages barely move, because in the first fifty plies almost nothing has been traded.
+The endgame is a different story. From ply 50 on, over 140 games of 160 plies:
+
+| from ply 50 | holding dead cards | swapping them out |
+|---|---|---|
+| dead cards held (of a hand of 3) | **1.19** | **0.00** |
+| emergency move fires | **11.4%** | **6.0%** |
+| moves affordable | 52.2% | 55.1% |
+| types reachable | 63.5% | 67.5% |
+| open (cards inert) | 16.3% | 17.1% |
+
+Nearly **forty percent of the hand** was permanently dead weight by the endgame, and the
+emergency move — designed to fire on 2.6% of turns — was opening on more than one turn in
+nine. That is precisely the "safety net becoming a normal way to play" the doc warns
+against, arrived at by accident.
+
+The important column is the last one. `open` moves by 0.8 points, so the cards still
+constrain just as often as before; what changed is that the player is no longer holding
+junk while they do it. The fix removes dead weight without loosening the mode.
+
+`BALANCE_NO_SWAP=1 npm run balance` reproduces the left-hand column.
+
 ## Re-tuning
 
 Change `TUNING`, then run `npm run balance`. Nothing else hardcodes these numbers: both

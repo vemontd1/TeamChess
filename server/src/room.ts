@@ -3,7 +3,7 @@ import { pickMove, pieceValue, type MoveStyle } from './bots.js';
 import {
   createCards, cardsPublic, drawTargetFor, drawUpTo, drawBonus, refreshEmergency,
   resolveSpend, commitSpend, snapshotCards, movableTypes, cardCovers, FREE_PIECE,
-  mulligan as mulliganCards,
+  extinctTypes, replaceExtinct, mulligan as mulliganCards,
   type CardsState, type Spend,
 } from './cards.js';
 import type {
@@ -425,7 +425,11 @@ export function beginCardTurn(room: Room): void {
   if (!room.cards || room.status !== 'playing') return;
   const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
   const side = room.cards[turn];
+
+  // Fill first, then prune: a card drawn to fill the hand is as subject to the piece
+  // being gone as one that was already there, and pruning afterwards catches both.
   drawUpTo(side, drawTargetFor(room.history.length));
+  side.lastReplaced = replaceExtinct(side, extinctTypes(room.chess, turn));
   refreshEmergency(side, room.chess);
 }
 

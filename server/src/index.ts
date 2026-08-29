@@ -81,6 +81,7 @@ async function pushHands(room: Room): Promise<void> {
       emergency: yourTurn && side.emergency,
       mulliganAvailable: yourTurn && !side.mulliganUsed,
       yourTurn,
+      replaced: yourTurn ? side.lastReplaced : [],
     });
   });
 }

@@ -77,6 +77,8 @@ export interface CardSide {
   emergenciesUsed: number;
   /** Recomputed at the start of each turn: true when no card in hand can move anything. */
   emergency: boolean;
+  /** Kinds swapped out this turn because that piece is gone from the board. */
+  lastReplaced: CardKind[];
 }
 
 export interface CardsState {
@@ -102,7 +104,7 @@ function makeSide(seqStart: number): { side: CardSide; seq: number } {
   shuffle(deck);
   const side: CardSide = {
     hand: [], deck, discard: [], mulliganUsed: false,
-    played: [], emergenciesUsed: 0, emergency: false,
+    played: [], emergenciesUsed: 0, emergency: false, lastReplaced: [],
   };
   drawUpTo(side, TUNING.drawTarget);
   return { side, seq };
@@ -196,6 +198,76 @@ export function refreshEmergency(side: CardSide, chess: Chess): void {
   const movable = movableTypes(chess);
   side.emergency = side.hand.length === 0
     || !side.hand.some(c => cardPlayable(c, movable));
+}
+
+/**
+ * Piece types this player has none of left on the board.
+ *
+ * A card for one of these is not merely dead in this position -- it is dead in every
+ * position that can follow, because the piece it names does not exist any more. That is a
+ * different thing from a bishop that happens to be blocked this turn, and it is why the
+ * two are treated differently below.
+ */
+export function extinctTypes(chess: Chess, color: Color): Set<string> {
+  const mine = color === 'white' ? 'w' : 'b';
+  const alive = new Set<string>();
+  for (const row of chess.board()) {
+    for (const cell of row) if (cell && cell.color === mine) alive.add(cell.type);
+  }
+  const out = new Set<string>();
+  for (const type of ['p', 'n', 'b', 'r', 'q']) if (!alive.has(type)) out.add(type);
+  return out;
+}
+
+/** A Wild only dies with the whole army: while any piece remains, it can move it. */
+function isExtinct(card: Card, extinct: Set<string>): boolean {
+  if (card.kind === 'wild') return extinct.size === 5;
+  return extinct.has(CARD_PIECE[card.kind]);
+}
+
+/**
+ * Swap out cards for pieces the player no longer has, drawing a replacement for each.
+ *
+ * Without this a hand quietly shrinks as the game goes on: trade off both knights and the
+ * Knight cards you hold become permanent dead weight, so a hand of three plays as a hand
+ * of two, and by the endgame -- where most of the army is gone -- as a hand of one. That
+ * is not the constraint the mode is built on. Being unable to move the bishop you have is
+ * a position to solve; holding a card for a bishop that no longer exists is just a
+ * smaller hand.
+ *
+ * Cards go back to the discard rather than out of the deck, so a pawn promoting to a
+ * knight makes Knight cards meaningful again on their own.
+ *
+ * The replacement is not recorded in `played` -- nothing was spent on a move -- and the
+ * loop is bounded twice: it does nothing unless a live card exists outside the hand, and
+ * it never looks at more cards than exist. A player down to a bare king has no live card
+ * anywhere, and gets no churn.
+ */
+export function replaceExtinct(side: CardSide, extinct: Set<string>): CardKind[] {
+  if (extinct.size === 0) return [];
+  const outside = side.deck.length + side.discard.length;
+  const anyLive = side.deck.some(c => !isExtinct(c, extinct))
+    || side.discard.some(c => !isExtinct(c, extinct));
+  if (!anyLive) return [];
+
+  const replaced: CardKind[] = [];
+  // held back until the end, so a card just discarded cannot be reshuffled and redrawn
+  const retired: Card[] = [];
+  let guard = outside + 1;
+
+  while (guard-- > 0) {
+    const at = side.hand.findIndex(c => isExtinct(c, extinct));
+    if (at < 0) break;
+    const [dead] = side.hand.splice(at, 1);
+    const fresh = drawOne(side);
+    if (!fresh) { side.hand.splice(at, 0, dead); break; }   // nothing left to draw
+    side.hand.push(fresh);
+    retired.push(dead);
+    replaced.push(dead.kind);
+  }
+
+  side.discard.push(...retired);
+  return replaced;
 }
 
 export type Spend =
@@ -316,6 +388,7 @@ export function snapshotCards(cards: CardsState): CardsState {
     played: [...s.played],
     emergenciesUsed: s.emergenciesUsed,
     emergency: s.emergency,
+    lastReplaced: [...s.lastReplaced],
   });
   return { white: clone(cards.white), black: clone(cards.black), seq: cards.seq };
 }
