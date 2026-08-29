@@ -502,13 +502,19 @@ async function main() {
   await waitFor(cw, s => s.status === 'playing');
   await sleep(200);
 
-  check('both sides are dealt five',
-    cw.hand?.cards.length === 5 && cbk.hand?.cards.length === 5,
-    `${cw.hand?.cards.length} / ${cbk.hand?.cards.length}`);
+  // Sizes come from the server's own published target rather than a literal, so retuning
+  // the mode does not silently invalidate the suite. docs/BALANCE.md owns the numbers.
+  const HAND = cw.last.cards.drawTarget;
+  const DECK = cw.last.cards.white.handCount + cw.last.cards.white.deckCount
+    + cw.last.cards.white.discardCount;
+  check('the deck is thirty-six a side', DECK === 36, String(DECK));
+  check('both sides are dealt a full hand',
+    cw.hand?.cards.length === HAND && cbk.hand?.cards.length === HAND,
+    `${cw.hand?.cards.length} / ${cbk.hand?.cards.length}, target ${HAND}`);
   check('each player is given their own colour',
     cw.hand?.color === 'white' && cbk.hand?.color === 'black');
   check('the public state agrees on the counts',
-    cw.last.cards.white.handCount === 5 && cw.last.cards.black.handCount === 5,
+    cw.last.cards.white.handCount === HAND && cw.last.cards.black.handCount === HAND,
     JSON.stringify(cw.last.cards));
   check('a spectator is dealt nothing', cspec.hand === null, JSON.stringify(cspec.hand));
 
@@ -518,7 +524,8 @@ async function main() {
     !publicBlob.includes('"id"') && !publicBlob.includes('"kind"'), publicBlob);
   check('only White is on the clock at the start',
     cw.hand.yourTurn === true && cbk.hand.yourTurn === false);
-  check('the deck is 36 less the opening hand', cw.last.cards.white.deckCount === 31,
+  check('the draw pile is the deck less the opening hand',
+    cw.last.cards.white.deckCount === DECK - HAND,
     String(cw.last.cards.white.deckCount));
 
   log('\n=== 17. Chess Cards: a card is required, and the king never needs one ===');
@@ -532,7 +539,7 @@ async function main() {
     check(`a ${unaffordable.piece} move with no card for it is refused`, refused === false,
       `${unaffordable.from}${unaffordable.to}`);
     check('the refused move did not touch the board', cw.last.history.length === 0);
-    check('the refused move did not spend a card', cw.hand.cards.length === 5);
+    check('the refused move did not spend a card', cw.hand.cards.length === HAND);
   } else {
     check('every opening move was affordable, so there was nothing to refuse', true);
   }
@@ -551,7 +558,8 @@ async function main() {
     return k === 'wild' || CARD_PIECE[k] === affordable.piece;
   })(), `${cw.last.cards.white.played[spentBefore]} for ${affordable.piece}`);
   check('the opponent sees a card was spent, not which one left the hand',
-    cbk.last.cards.white.handCount === 4, String(cbk.last.cards.white.handCount));
+    cbk.last.cards.white.handCount === HAND - 1,
+    String(cbk.last.cards.white.handCount));
   check('Black never received a White hand', cbk.hand.color === 'black');
 
   log('\n=== 18. Chess Cards: a full game holds every invariant ===');
@@ -569,11 +577,12 @@ async function main() {
 
     if (!hand || !hand.yourTurn) { bad = `${color} has no live hand on its own turn`; break; }
 
-    const target = st.history.length >= 20 ? 6 : 5;
+    const target = st.cards.drawTarget;
     if (st.history.length >= 20 && !enrageChecked) {
       enrageChecked = true;
       check('soft enrage raises the draw target at twenty plies',
-        st.cards.drawTarget === 6 && st.cards.enraged === true, JSON.stringify(st.cards));
+        st.cards.drawTarget === HAND + 1 && st.cards.enraged === true,
+        JSON.stringify(st.cards));
     }
     // A hand may sit above the target after a capture bonus; it may never sit below the
     // target while cards remain, and it may never pass the cap.
@@ -649,11 +658,13 @@ async function main() {
   await sleep(200);
   const secondHand = cm1.hand.cards.map(c => c.id).sort().join(',');
   check('a mulligan deals a different hand', secondHand !== firstHand);
-  check('the new hand is still five', cm1.hand.cards.length === 5,
+  check('the new hand is a full one',
+    cm1.hand.cards.length === cm1.last.cards.drawTarget,
     String(cm1.hand.cards.length));
   check('the mulligan is publicly spent', cm1.last.cards.white.mulliganUsed === true);
   check('the old hand went to the discard pile',
-    cm1.last.cards.white.discardCount === 5, String(cm1.last.cards.white.discardCount));
+    cm1.last.cards.white.discardCount === cm1.last.cards.drawTarget,
+    String(cm1.last.cards.white.discardCount));
 
   cm1.emit('cards:mulligan');
   await sleep(150);
@@ -707,7 +718,8 @@ async function main() {
   const mv = gt.moves({ verbose: true }).find(m => rt.has(m.piece) && m.piece !== 'k');
   await emitCb(tk1, 'game:move', { from: mv.from, to: mv.to });
   await sleep(150);
-  check('the move spent a card', tk1.hand.cards.length === 4,
+  check('the move spent a card',
+    tk1.hand.cards.length === tk1.last.cards.drawTarget - 1,
     String(tk1.hand.cards.length));
 
   tk1.emit('takeback:request');

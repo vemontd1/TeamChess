@@ -17,21 +17,48 @@ export const EMERGENCY_CARD_ID = -1;
 /** A move by the king never costs a card, so no hand can ever lock a player out. */
 export const FREE_PIECE = 'k';
 
-const HAND_MAX = 7;
-const DRAW_TARGET = 5;
-const ENRAGE_DRAW_TARGET = 6;
-
 /**
- * Soft enrage after twenty plies. The design doc says "20 полного ходов (10 ходов White +
- * 10 ходов Black)" -- the parenthetical is the binding one, so it is twenty half-moves,
- * counted off the same history the move list is drawn from.
+ * Every number the mode's feel depends on, in one place.
+ *
+ * These are balance, not rules, and they are exported mutable so `test/balance.mjs` can
+ * sweep them against simulated games. Nothing at runtime writes to this.
+ *
+ * What they have to buy is a hand that actually constrains. The first pass took the design
+ * doc's figures literally -- five cards, four Wilds in thirty-six -- and measured far too
+ * loose: on 33% of turns every legal move was affordable anyway, and 73% of all legal
+ * moves were. Playtesting put it plainly: "feels like I can always move almost any piece."
+ *
+ * Two causes, and the harness separates them. A hand of five out of only six kinds holds
+ * 3.4 distinct kinds, which covers most of what a position offers; and a Wild unlocks
+ * everything at once, which 26% of turns had one of. Cutting Wild to a single copy and the
+ * hand to three takes the unconstrained share to 9% and move coverage to 56%.
+ *
+ * Going thinner still works on paper and not in play: hand-of-two, or a pawn-light deck,
+ * pushes the emergency move from 3% of turns to 4-5%, and the doc is explicit that it is
+ * "a safety net, not a normal way to play". `docs/BALANCE.md` has the full table.
  */
-const ENRAGE_AFTER_PLIES = 20;
-
-/** One fixed symmetrical deck for both players; no deckbuilding in the MVP. */
-const DECK_RECIPE: Array<[CardKind, number]> = [
-  ['pawn', 10], ['knight', 7], ['bishop', 7], ['rook', 5], ['queen', 3], ['wild', 4],
-];
+export const TUNING = {
+  handMax: 7,
+  drawTarget: 3,
+  enrageDrawTarget: 4,
+  /**
+   * Soft enrage after twenty plies. The design doc says "20 полного ходов (10 ходов White
+   * + 10 ходов Black)" -- the parenthetical is the binding one, so it is twenty
+   * half-moves, counted off the same history the move list is drawn from.
+   */
+  enrageAfterPlies: 20,
+  /**
+   * One fixed symmetrical deck for both players; no deckbuilding in the MVP.
+   *
+   * The doc's shape, still thirty-six, with Wild cut from four copies to one. Duplicates
+   * are what make a hand bite -- three cards spread over three kinds is a real position to
+   * solve, where five over five is none -- so the copies freed by Wild went to the pieces
+   * that already had the most.
+   */
+  deck: [
+    ['pawn', 11], ['knight', 8], ['bishop', 8], ['rook', 5], ['queen', 3], ['wild', 1],
+  ] as Array<[CardKind, number]>,
+};
 
 /** Which chess piece each card unlocks. Wild is handled separately -- it unlocks any. */
 const CARD_PIECE: Record<Exclude<CardKind, 'wild'>, string> = {
@@ -69,7 +96,7 @@ function shuffle<T>(a: T[]): T[] {
 function makeSide(seqStart: number): { side: CardSide; seq: number } {
   const deck: Card[] = [];
   let seq = seqStart;
-  for (const [kind, n] of DECK_RECIPE) {
+  for (const [kind, n] of TUNING.deck) {
     for (let i = 0; i < n; i++) deck.push({ id: ++seq, kind });
   }
   shuffle(deck);
@@ -77,7 +104,7 @@ function makeSide(seqStart: number): { side: CardSide; seq: number } {
     hand: [], deck, discard: [], mulliganUsed: false,
     played: [], emergenciesUsed: 0, emergency: false,
   };
-  drawUpTo(side, DRAW_TARGET);
+  drawUpTo(side, TUNING.drawTarget);
   return { side, seq };
 }
 
@@ -99,7 +126,7 @@ function drawOne(side: CardSide): Card | null {
 
 export function drawUpTo(side: CardSide, target: number): number {
   let drawn = 0;
-  while (side.hand.length < target && side.hand.length < HAND_MAX) {
+  while (side.hand.length < target && side.hand.length < TUNING.handMax) {
     const c = drawOne(side);
     if (!c) break;
     side.hand.push(c);
@@ -110,7 +137,7 @@ export function drawUpTo(side: CardSide, target: number): number {
 
 /** The capture bonus: one extra card, still bounded by the hand cap. */
 export function drawBonus(side: CardSide): number {
-  if (side.hand.length >= HAND_MAX) return 0;
+  if (side.hand.length >= TUNING.handMax) return 0;
   const c = drawOne(side);
   if (!c) return 0;
   side.hand.push(c);
@@ -118,11 +145,16 @@ export function drawBonus(side: CardSide): number {
 }
 
 export function drawTargetFor(plies: number): number {
-  return plies >= ENRAGE_AFTER_PLIES ? ENRAGE_DRAW_TARGET : DRAW_TARGET;
+  return isEnraged(plies) ? TUNING.enrageDrawTarget : TUNING.drawTarget;
 }
 
 export function isEnraged(plies: number): boolean {
-  return plies >= ENRAGE_AFTER_PLIES;
+  return plies >= TUNING.enrageAfterPlies;
+}
+
+/** The whole deck, for anything that needs to count it. */
+export function deckSize(): number {
+  return TUNING.deck.reduce((n, [, count]) => n + count, 0);
 }
 
 /**

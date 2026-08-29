@@ -18,6 +18,7 @@
     "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "tsx test/cards.mjs",
+    "balance": "tsx test/balance.mjs",
     "test:e2e": "node test/integration.mjs"
   },
   "devDependencies": {

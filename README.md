@@ -31,7 +31,7 @@ clock run down.
 
 ## Chess Cards
 
-You hold a hand of five. Each card names a piece type, and you may only move a piece you
+You hold a hand of three. Each card names a piece type, and you may only move a piece you
 hold the card for; playing it spends it. **The king never needs a card**, so no hand can
 lock you out of the game.
 
@@ -47,11 +47,12 @@ One fixed 36-card deck per side, the same for both players — no deckbuilding:
 
 | Pawn | Knight | Bishop | Rook | Queen | Wild |
 |---|---|---|---|---|---|
-| 10 | 7 | 7 | 5 | 3 | 4 |
+| 11 | 8 | 8 | 5 | 3 | 1 |
 
-A **Wild** moves anything. It is a rare universal answer, not a normal turn.
+A **Wild** moves anything. One copy in thirty-six: a rare universal answer, not a normal
+turn.
 
-**The loop.** Draw back up to five at the start of your turn, play one card, make one
+**The loop.** Draw back up to three at the start of your turn, play one card, make one
 ordinary chess move. The spent card goes face up on your discard; when your deck runs out
 the discard is reshuffled into a new one. You may hold up to **seven** — past that you stop
 drawing, so a card kept back for a future threat is a card you are not replacing.
@@ -59,7 +60,7 @@ drawing, so a card kept back for a future threat is a card you are not replacing
 **Tempo.** A capture draws you an extra card at the end of the turn. Going forward widens
 the hand that has to sustain going forward.
 
-**Soft enrage.** From the twentieth ply both sides draw to six instead of five, so the
+**Soft enrage.** From the twentieth ply both sides draw to four instead of three, so the
 endgame stops hanging on a bad draw.
 
 **Nobody gets stuck.** Two safety nets, in the order they fire:
@@ -71,6 +72,11 @@ endgame stops hanging on a bad draw.
   hand you could not use anyway.
 
 So the absence of a card never mates you. Mate only ever comes out of the position.
+
+**The numbers are not the design doc's.** Its suggested hand of five and four Wilds measured
+far too loose — the cards were inert on a third of all turns — and the first playtest said
+so. `docs/BALANCE.md` has the simulation, the table, and why the shipped hand is three with
+a single Wild; `npm run balance` re-runs it.
 
 **What your opponent can see.** The size of your hand, and every card you have spent, face
 up. Never the hand itself — hands travel to one socket, not in the broadcast room state, so
@@ -132,6 +138,7 @@ deploy; the same build/start pair works on any Node host.
 ### Tests
 
 ```bash
+npm run balance      # simulate Chess Cards games and measure how much the cards bite
 npm run test:unit    # the card engine, no server needed
 
 npm start            # in one shell
@@ -229,7 +236,7 @@ change, and hiding them would not calm the interface, only make it lie.
 server/src/
   index.ts    Socket.IO event handlers, takeback resolution, team-scoped delivery
   room.ts     room model, rotation cursors, clocks, undo frames, chat, marks
-  cards.ts    Chess Cards: deck, hands, spending, the emergency move
+  cards.ts    Chess Cards: deck, hands, spending, the emergency move, and TUNING
   bots.ts     move selection — 'random' for timeouts, 'greedy' for bot seats
   types.ts    wire types (mirrored into client/src/types.ts)
 
