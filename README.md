@@ -81,7 +81,10 @@ the hand that has to sustain going forward.
 so the endgame stops hanging on a bad draw.
 
 **Sacrifice.** Once every ten plies you may burn **three cards** from your hand to move any
-piece you like. This is the answer to the mode's sharpest moment — seeing the winning move
+piece you like. Both sides see it: the screen takes a red flash and a heavy rim, with runs
+down from the top edge — the only red in an otherwise amber interface, and heavier for the
+player who paid than for the one watching. It survives reduced motion as a still rim rather
+than disappearing, because what it costs is information rather than decoration. This is the answer to the mode's sharpest moment — seeing the winning move
 and holding the wrong cards for it. It costs most of a hand and two turns of dealing, and
 the cooldown is what keeps it the way a game is rescued rather than the way it is played.
 Pick **Sacrifice**, choose the three cards to burn, then move. Dead cards count as fuel,
@@ -220,14 +223,30 @@ not.** The answer moving around depending on what it is would be the worst of bo
 |---|---|
 | `#/` | home — create or join a game |
 | `#/login`, `#/signup` | sign in, or register; either redirects to the profile if already signed in |
-| `#/profile` | your avatar, tally and games; redirects to `#/login` if signed out |
+| `#/profile` | your avatar, tally, activity and games; redirects to `#/login` if signed out |
 | `#/r/<code>` | a room, with its own header |
 
+The room header carries the same chip, because a player waiting in a lobby is exactly who
+has a minute to look at their own games — and the profile then offers **the way back into
+that room** rather than dropping them on the home screen to find the code again. Rejoining
+is the ordinary join, so the seat token reclaims the seat they left.
+
 The profile is the shape a chess site uses, because it is the shape people already read:
-identity and tally at the top, then a dense list of games where each row is one match —
-both players, mode, length, when, result — and the whole row opens the replay. Avatars are
-generated from the name (initials on a hashed hue), so there is nothing to upload and no
-account that starts out blank.
+identity and record at the top, then a dense list of games where each row is one match —
+both players, the colour you had, mode, length, when, and how it ended — and the whole row
+opens the replay. Avatars are generated from the name (initials on a hashed hue), so there
+is nothing to upload and no account that starts out blank.
+
+Between them sits **a year of play, one square per day**, in the shape GitHub uses for
+commits. It answers the question the tally cannot: not how many games, but when. Counts
+are kept per day as games are recorded rather than derived from the games list — the list
+is capped, and a year of play would otherwise show a grid that quietly emptied from the
+left. It is amber rather than green, because a green heatmap would look borrowed.
+
+Numbers on this page are set in the UI face with tabular lining figures rather than in the
+display serif. Cormorant's figures are old-style — 3, 4, 7 and 9 hang below the baseline at
+uneven heights — which in a column of stats reads as type stretched out of shape rather
+than as a typeface.
 
 ### How it is kept
 

@@ -98,7 +98,12 @@ async function route(): Promise<void> {
     // a review is a lens over one room's game; entering another room is not that game
     reviewPly: null, archived: null,
   });
-  teardown = renderRoom(app, roomId, () => { location.hash = ''; });
+  setState({ lastRoomId: roomId });
+  teardown = renderRoom(app, roomId, () => {
+    // Exit leaves the room for good, so the offer to go back goes with it.
+    setState({ lastRoomId: null });
+    location.hash = '';
+  });
 }
 
 window.addEventListener('hashchange', () => { void route(); });

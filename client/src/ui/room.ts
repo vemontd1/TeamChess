@@ -7,6 +7,8 @@ import {
 } from './widgets';
 import { sfx, setSoundEnabled, unlockAudio } from '../audio/sfx';
 import { showTurnAlert, clearTurnAlert } from './turnAlert';
+import { showBloodBurst, clearBloodBurst } from './bloodBurst';
+import { avatarHtml } from './avatar';
 import { CardHand, reachOf, typesForKind, EMERGENCY_CARD_ID } from './cardHand';
 import { effectsEnabled, toggleMotion, systemPrefersReduced, getMotionPref, motionLevel } from '../state/motion';
 import * as net from '../net/socket';
@@ -30,6 +32,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
         <button class="btn btn-sm btn-icon btn-ghost" id="flip" title="Flip board (F)">⇅</button>
         <button class="btn btn-sm btn-icon btn-ghost" id="sound" title="Toggle sound (M)">♪</button>
         <button class="btn btn-sm btn-icon btn-ghost" id="fx" title="Toggle visual effects (E)">✦</button>
+        <span id="who"></span>
         <button class="btn btn-sm btn-ghost" id="exit">Exit</button>
       </header>
 
@@ -48,6 +51,22 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
         <div class="side-column" id="right"></div>
       </div>
     </div>`;
+
+  // Who you are, and the way to your own games -- reachable from the lobby rather than
+  // only from the home screen, since a player waiting for opponents is exactly who has a
+  // minute to look. The room id is remembered on the way out, so the profile can offer
+  // the way back rather than stranding them on the home screen.
+  const whoSlot = root.querySelector<HTMLElement>('#who')!;
+  const paintWho = (): void => {
+    const acc = getState().account;
+    whoSlot.innerHTML = acc
+      ? `<a class="room-me" href="#/profile" title="Your profile and games">
+           ${avatarHtml(acc.username, 'sm')}
+           <span class="room-me-name">${escapeHtml(acc.username)}</span>
+         </a>`
+      : `<a class="btn btn-sm btn-ghost" href="#/login">Log in</a>`;
+  };
+  paintWho();
 
   const boardHost = root.querySelector<HTMLElement>('#board')!;
   const leftCol = root.querySelector<HTMLElement>('#left')!;
@@ -248,7 +267,18 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
   net.onFx((fx: MoveFx) => {
     const s = getState();
+
+    // The blood is not a sound setting, so it runs before the early return below: a
+    // player with sound off still has to see what a sacrifice cost.
+    if (fx.sacrifice) {
+      // Whoever is on the clock now is *not* the player who paid -- the move has already
+      // been applied by the time this arrives, so the payer is the other side.
+      const payer: Color | null = s.room ? (s.room.turn === 'white' ? 'black' : 'white') : null;
+      showBloodBurst(payer != null && s.you?.seat?.color === payer);
+    }
+
     if (!s.soundOn) return;
+    if (fx.sacrifice) sfx.resign();
     if (fx.auto) sfx.timeout();
     else if (fx.promotion) sfx.promote();
     else if (fx.castle) sfx.castle();
@@ -778,6 +808,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
   return () => {
     unsub();
+    clearBloodBurst();
     timer.destroy();
     cardHand.destroy();
     board.destroy();

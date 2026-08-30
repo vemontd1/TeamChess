@@ -591,3 +591,39 @@
   .viewer-moves { max-height: calc(200px * var(--ui)); }
 }
 
+
+
+/* ---- who you are, from inside a room ----------------------------------------
+   A player waiting in a lobby is exactly who has a minute to look at their own
+   games, so the way there is in the room header too -- and the profile offers the
+   way back rather than dropping them on the home screen to find the code again. */
+
+.room-me {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px 4px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  text-decoration: none;
+  color: var(--text-dim);
+  transition: border-color var(--dur-ui) var(--ease-out),
+              background var(--dur-ui) var(--ease-out);
+}
+.room-me:hover {
+  border-color: var(--panel-edge-strong);
+  background: var(--accent-wash);
+  color: var(--text);
+}
+.room-me-name {
+  font-size: calc(12px * var(--ui));
+  font-weight: 500;
+  max-width: calc(120px * var(--ui));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+  .room-me-name { display: none; }
+}

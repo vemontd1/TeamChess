@@ -11,10 +11,13 @@
   place-items: center;
   flex: 0 0 auto;
   border-radius: 50%;
-  font-family: var(--font-display);
+  /* The UI face, not the display serif: Cormorant is a narrow high-contrast display cut,
+     and two capitals of it inside a circle read as letters stretched to fit rather than
+     as a monogram. */
+  font-family: var(--font-ui);
   font-weight: 600;
-  letter-spacing: 0.01em;
-  color: hsl(var(--avatar-h) 70% 90%);
+  letter-spacing: 0.02em;
+  color: hsl(var(--avatar-h) 72% 88%);
   background:
     linear-gradient(150deg,
       hsl(var(--avatar-h) 42% 34%),
@@ -200,53 +203,200 @@ a.btn {
 .home-guest a { color: var(--accent); text-decoration: none; }
 .home-guest a:hover { text-decoration: underline; }
 
-/* ---- profile: the identity block ---- */
+/* ---- profile: the identity block ---------------------------------------------
+   Numbers are set in the UI face with tabular lining figures. Cormorant's figures
+   are old-style -- 3, 4, 7 and 9 hang below the baseline at uneven heights -- which
+   in a column of stats reads as type stretched out of shape rather than as a face. */
 
 .prof-hero {
   display: flex;
-  align-items: center;
-  gap: calc(20px * var(--ui));
+  flex-direction: column;
+  gap: calc(18px * var(--ui));
   padding: calc(24px * var(--ui)) calc(26px * var(--ui));
-  flex-wrap: wrap;
 }
 
-.prof-id { min-width: 0; }
+.prof-face {
+  display: flex;
+  align-items: center;
+  gap: calc(20px * var(--ui));
+}
+
+.prof-id { min-width: 0; flex: 1 1 auto; }
 .prof-id h1 {
   font-family: var(--font-display);
-  font-size: calc(26px * var(--ui));
+  font-size: calc(30px * var(--ui));
   font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: 0.005em;
+  font-variant-numeric: lining-nums;
   margin: 0;
   overflow-wrap: anywhere;
 }
 .prof-since {
-  margin-top: 3px;
-  font-size: calc(12px * var(--ui));
+  margin-top: 5px;
+  font-size: calc(12.5px * var(--ui));
   color: var(--text-faint);
+  line-height: 1.5;
 }
 
-.prof-tallies {
+.prof-out { flex: 0 0 auto; align-self: flex-start; }
+
+/* the tally */
+
+.prof-stats {
   display: flex;
-  gap: calc(22px * var(--ui));
-  margin-left: auto;
+  flex-wrap: wrap;
+  gap: calc(26px * var(--ui));
+  padding-top: calc(4px * var(--ui));
+  border-top: 1px solid var(--line);
+  padding-top: calc(16px * var(--ui));
 }
-.tally { text-align: center; }
-.tally b {
+
+.stat b {
   display: block;
-  font-family: var(--font-display);
-  font-size: calc(24px * var(--ui));
-  font-weight: 600;
-  line-height: 1.1;
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-size: calc(26px * var(--ui));
+  font-weight: 650;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--text);
 }
-.tally span {
-  font-size: calc(10.5px * var(--ui));
-  letter-spacing: 0.14em;
+.stat span {
+  display: block;
+  margin-top: 3px;
+  font-size: calc(10px * var(--ui));
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-faint);
 }
-.tally-win b { color: #86C58A; }
-.tally-loss b { color: #D97F6C; }
+.stat-win b { color: #86C58A; }
+.stat-loss b { color: #D97F6C; }
+.stat-rate { margin-left: auto; text-align: right; }
+.stat-rate b { color: var(--accent); }
+.stat-rate em {
+  font-style: normal;
+  font-size: calc(15px * var(--ui));
+  margin-left: 1px;
+  opacity: 0.65;
+}
+.stat-rate span { border-bottom: 1px dotted var(--line); display: inline-block; cursor: help; }
 
-.prof-out { align-self: flex-start; }
+/* one bar, three segments, always summing to the whole */
+
+.prof-bar {
+  display: flex;
+  height: calc(7px * var(--ui));
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+}
+.prof-bar span { display: block; height: 100%; }
+.bar-win  { background: linear-gradient(180deg, #8FD094, #6FA86B); }
+.bar-draw { background: rgba(255, 255, 255, 0.16); }
+.bar-loss { background: linear-gradient(180deg, #E08C78, #C2604A); }
+
+.prof-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(18px * var(--ui));
+  font-size: calc(12px * var(--ui));
+  color: var(--text-faint);
+}
+.prof-facts b {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-weight: 650;
+  color: var(--text-dim);
+}
+
+/* ---- the way back into a game you stepped out of ---- */
+
+.back-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(10px * var(--ui)) calc(16px * var(--ui));
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius-sm);
+  background: var(--accent-wash);
+  color: var(--text-dim);
+  font-size: calc(13px * var(--ui));
+  text-decoration: none;
+  transition: border-color var(--dur-ui) var(--ease-out);
+}
+.back-strip:hover { border-color: var(--panel-edge-strong); color: var(--text); }
+.back-strip b { color: var(--accent); font-family: var(--font-mono); letter-spacing: 0.08em; }
+.back-arrow { color: var(--accent); transition: transform var(--dur-ui) var(--ease-out); }
+.back-strip:hover .back-arrow { transform: translateX(-3px); }
+
+/* ---- profile: a year of play -------------------------------------------------
+   The one block that answers a question the tally cannot: not how many games, but
+   when. Scrolls sideways on a narrow screen rather than squeezing the squares. */
+
+.act-sub { margin-left: auto; font-size: calc(11px * var(--ui)); color: var(--text-faint); }
+
+.act-wrap { padding: calc(16px * var(--ui)) calc(18px * var(--ui)); }
+.act-scroll { overflow-x: auto; padding-bottom: 4px; }
+
+.act-months {
+  display: grid;
+  grid-template-columns: repeat(var(--weeks, 53), calc(11px * var(--ui)));
+  gap: calc(3px * var(--ui));
+  margin-left: calc(30px * var(--ui));
+  height: calc(14px * var(--ui));
+  font-size: calc(9.5px * var(--ui));
+  color: var(--text-faint);
+  min-width: max-content;
+}
+.act-month { grid-row: 1; grid-column: var(--col); white-space: nowrap; }
+
+.act-body { display: flex; gap: calc(6px * var(--ui)); min-width: max-content; }
+
+.act-days {
+  display: grid;
+  grid-template-rows: repeat(7, calc(11px * var(--ui)));
+  gap: calc(3px * var(--ui));
+  width: calc(24px * var(--ui));
+  font-size: calc(9px * var(--ui));
+  color: var(--text-faint);
+}
+/* Mon, Wed, Fri -- rows 2, 4 and 6 of a Sunday-first week */
+.act-days span:nth-child(1) { grid-row: 2; }
+.act-days span:nth-child(2) { grid-row: 4; }
+.act-days span:nth-child(3) { grid-row: 6; }
+
+.act-grid {
+  display: grid;
+  grid-template-rows: repeat(7, calc(11px * var(--ui)));
+  grid-auto-flow: column;
+  grid-auto-columns: calc(11px * var(--ui));
+  gap: calc(3px * var(--ui));
+}
+
+.act-cell {
+  width: calc(11px * var(--ui));
+  height: calc(11px * var(--ui));
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.045);
+}
+/* Amber rather than green: the rest of the interface is amber, and a green heatmap
+   would look borrowed from somewhere else. */
+.act-l1 { background: rgba(232, 176, 75, 0.28); }
+.act-l2 { background: rgba(232, 176, 75, 0.5); }
+.act-l3 { background: rgba(232, 176, 75, 0.74); }
+.act-l4 { background: #F0BE63; box-shadow: 0 0 8px rgba(232, 176, 75, 0.4); }
+.act-future { background: none; }
+
+.act-legend {
+  display: flex;
+  align-items: center;
+  gap: calc(4px * var(--ui));
+  margin-top: calc(10px * var(--ui));
+  font-size: calc(10px * var(--ui));
+  color: var(--text-faint);
+}
+.act-legend span:first-child { margin-right: 3px; }
+.act-legend span:last-child { margin-left: 3px; }
 
 /* ---- profile: the game list --------------------------------------------------
    The value of the page is here, so the list gets the space: one row per match,
@@ -259,7 +409,7 @@ a.btn {
 
 .game-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: calc(16px * var(--ui));
   width: 100%;
@@ -296,26 +446,64 @@ a.btn {
 }
 .game-vs { font-size: calc(11px * var(--ui)); color: var(--text-faint); flex: 0 0 auto; }
 
-.game-mode, .game-plies, .game-when {
+.game-meta { display: flex; align-items: center; gap: calc(10px * var(--ui)); }
+
+.game-plies, .game-when {
   font-size: calc(11.5px * var(--ui));
+  font-variant-numeric: tabular-nums lining-nums;
   color: var(--text-faint);
   white-space: nowrap;
 }
 
-.game-res {
-  min-width: calc(76px * var(--ui));
-  text-align: center;
-  padding: 4px 10px;
-  border-radius: 5px;
-  font-size: calc(11px * var(--ui));
+/* The mode is a tag rather than plain text: it is the one column you scan for. */
+.game-mode {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: calc(10.5px * var(--ui));
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
-.game-res-win  { background: rgba(120, 190, 120, 0.15); color: #86C58A; }
-.game-res-loss { background: rgba(214, 90, 70, 0.15); color: #D97F6C; }
-.game-res-draw { background: rgba(255, 255, 255, 0.07); color: var(--text-dim); }
-.game-res-none { background: rgba(255, 255, 255, 0.04); color: var(--text-faint); }
+.mode-team  { background: rgba(255, 255, 255, 0.06); color: var(--text-dim); }
+.mode-cards { background: rgba(164, 145, 220, 0.16); color: #B4A4E4; }
+
+/* Which colour you had. Tiny, but it is the first thing anyone asks of an old game. */
+.game-dot {
+  width: calc(8px * var(--ui));
+  height: calc(8px * var(--ui));
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.dot-w { background: #E8DCC8; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4); }
+.dot-b { background: #2A2724; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28); }
+
+.game-res {
+  min-width: calc(112px * var(--ui));
+  text-align: right;
+  white-space: nowrap;
+}
+.game-res b {
+  display: block;
+  font-size: calc(12.5px * var(--ui));
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+.game-res i {
+  display: block;
+  margin-top: 1px;
+  font-style: normal;
+  font-size: calc(10.5px * var(--ui));
+  color: var(--text-faint);
+}
+.game-res-win b  { color: #86C58A; }
+.game-res-loss b { color: #D97F6C; }
+.game-res-draw b { color: var(--text-dim); }
+.game-res-none b { color: var(--text-faint); }
+
+/* A hairline of the result colour, so the column reads as a run of outcomes. */
+.game-row-win:hover  { border-left-color: #6FA86B; }
+.game-row-loss:hover { border-left-color: #C2604A; }
 
 .games-loading, .games-empty {
   padding: calc(34px * var(--ui)) calc(24px * var(--ui));
@@ -335,8 +523,11 @@ a.btn {
    first, because the pairing and the result are what a row is read for. */
 @media (max-width: 720px) {
   .game-row { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
-  .game-mode, .game-plies { display: none; }
-  .prof-tallies { margin-left: 0; width: 100%; justify-content: space-between; }
+  .game-meta, .game-when { display: none; }
+  .game-res i { display: none; }
+  .prof-stats { gap: calc(18px * var(--ui)); }
+  .stat-rate { margin-left: 0; text-align: left; }
+  .prof-face { flex-wrap: wrap; }
   .appbar { padding: 10px 16px; }
   .appbar-brand b { display: none; }
 }

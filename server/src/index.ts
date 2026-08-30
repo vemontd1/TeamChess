@@ -177,6 +177,7 @@ async function pushHands(room: Room): Promise<void> {
 /** Side effects the client needs to hear but cannot derive from state alone. */
 interface MoveFx {
   captured: boolean; castle: boolean; promotion: boolean; check: boolean; auto: boolean;
+  sacrifice: boolean;
 }
 function emitFx(room: Room, fx: MoveFx): void {
   io.to(room.id).emit('game:fx', fx);
@@ -191,7 +192,7 @@ const hooks: TurnHooks = {
     if (res?.ok) {
       emitFx(room, {
         captured: res.captured, castle: res.castle, promotion: res.promotion,
-        check: res.check, auto: true,
+        check: res.check, auto: true, sacrifice: res.sacrifice,
       });
     }
     if (room.status === 'playing') armTurn(room, hooks); else clearTimer(room);
@@ -206,7 +207,7 @@ const hooks: TurnHooks = {
     if (res?.ok) {
       emitFx(room, {
         captured: res.captured, castle: res.castle, promotion: res.promotion,
-        check: res.check, auto: false,
+        check: res.check, auto: false, sacrifice: res.sacrifice,
       });
     }
     if (room.status === 'playing') armTurn(room, hooks); else clearTimer(room);
@@ -420,7 +421,7 @@ io.on('connection', (socket: Socket) => {
 
     emitFx(room, {
       captured: res.captured, castle: res.castle, promotion: res.promotion,
-      check: res.check, auto: false,
+      check: res.check, auto: false, sacrifice: res.sacrifice,
     });
 
     if (room.status === 'playing') armTurn(room, hooks); else clearTimer(room);

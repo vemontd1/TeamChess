@@ -236,11 +236,14 @@ export interface ApplyResult {
   castle: boolean;
   promotion: boolean;
   check: boolean;
+  /** Cards mode: the move was bought by burning a hand of cards, not by playing one. */
+  sacrifice: boolean;
   san?: string;
 }
 
 const FAIL: ApplyResult = {
   ok: false, captured: false, castle: false, promotion: false, check: false,
+  sacrifice: false,
 };
 
 /**
@@ -407,6 +410,7 @@ export function applyMove(room: Room, m: MovePayload,
     castle: res.flags.includes('k') || res.flags.includes('q'),
     promotion: res.flags.includes('p'),
     check: room.chess.inCheck(),
+    sacrifice: spend?.kind === 'sacrifice',
     san: res.san,
   };
 }

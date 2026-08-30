@@ -41,6 +41,28 @@ interface StoredProfile {
   record: { wins: number; losses: number; draws: number };
   /** Newest first. */
   games: ProfileGame[];
+  /** Games finished per day, `YYYY-MM-DD` -> count. Feeds the activity grid. */
+  days?: Record<string, number>;
+}
+
+/** Days kept in the activity map: a little over a year, which is what the grid shows. */
+const MAX_DAYS = 400;
+
+/** Local-date key. The grid is read by a person in their own timezone, not in UTC. */
+function dayKey(at: number): string {
+  const d = new Date(at);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Drop days that have fallen off the far end of the grid, so the file cannot grow forever. */
+function pruneDays(days: Record<string, number>): Record<string, number> {
+  const keys = Object.keys(days).sort();
+  if (keys.length <= MAX_DAYS) return days;
+  const keep = new Set(keys.slice(-MAX_DAYS));
+  const out: Record<string, number> = {};
+  for (const k of keys) if (keep.has(k)) out[k] = days[k];
+  return out;
 }
 
 const cache = new Map<string, StoredProfile>();
@@ -110,7 +132,7 @@ export function touchProfile(id: string, name: string): Profile {
   if (!p) {
     p = {
       id, name, createdAt: now, lastSeenAt: now,
-      record: { wins: 0, losses: 0, draws: 0 }, games: [],
+      record: { wins: 0, losses: 0, draws: 0 }, games: [], days: {},
     };
     cache.set(id, p);
   }
@@ -165,6 +187,15 @@ export function recordGame(
   };
   p.games.unshift(entry);
   if (p.games.length > MAX_GAMES) p.games.length = MAX_GAMES;
+
+  // Counted here rather than derived from `games` on read: the list is capped, and a year
+  // of play would otherwise show a grid that quietly emptied from the left as old games
+  // fell off it.
+  const days = p.days ?? {};
+  const key = dayKey(summary.finishedAt);
+  days[key] = (days[key] ?? 0) + 1;
+  p.days = pruneDays(days);
+
   p.lastSeenAt = Date.now();
   save(p);
 }
@@ -178,5 +209,6 @@ export function profileView(id: string, limit = 25): ProfileView | null {
   return {
     profile: publicOf(p),
     games: p.games.slice(0, Math.min(Math.max(1, limit), MAX_GAMES)),
+    activity: { ...(p.days ?? {}) },
   };
 }

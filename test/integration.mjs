@@ -997,6 +997,14 @@ async function main() {
       cs1.last.cards.white.played.length === COST
       && cs1.last.cards.white.sacrificesUsed === 1,
       JSON.stringify(cs1.last.cards.white.played));
+    // The client draws the blood off this flag, and both sides have to get it: the
+    // opponent watching three cards burn is exactly who the effect is telling.
+    check('the move effect says a sacrifice paid for it',
+      cs1.fx.at(-1)?.sacrifice === true && cs2.fx.at(-1)?.sacrifice === true,
+      JSON.stringify(cs1.fx.at(-1)));
+    check('and an ordinary move does not',
+      cs1.fx.slice(0, -1).every(f => f.sacrifice === false),
+      JSON.stringify(cs1.fx.map(f => f.sacrifice)));
     check('the cooldown is now running, and both sides can see it',
       cs1.last.cards.white.sacrificeReadyIn > 0
       && cs2.last.cards.white.sacrificeReadyIn > 0,
@@ -1111,6 +1119,25 @@ async function main() {
       prof.profile.id);
     check('and the record is filed under the account name',
       prof.profile.name === 'Arch-W', prof.profile.name);
+
+    // The activity grid is drawn from this, and it is counted as games are recorded
+    // rather than derived from the (capped) games list.
+    const today = (() => {
+      const d = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    })();
+    check('the profile carries per-day activity for the grid',
+      prof.activity && typeof prof.activity === 'object'
+      && prof.activity[today] >= 1,
+      JSON.stringify(prof.activity));
+    check('and the day counts at least as many games as the list shows for today',
+      prof.activity[today] >= prof.games.filter(g => {
+        const d = new Date(g.finishedAt);
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` === today;
+      }).length,
+      `${prof.activity[today]} counted`);
     check('and it can be read by that public id',
       (await fetchJson(`/api/profile/${prof.profile.id}`))?.profile?.id === prof.profile.id);
 

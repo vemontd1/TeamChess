@@ -35,6 +35,14 @@ export interface AppState {
   account: Account | null;
   /** The profile last fetched, so arriving at the profile page is not a spinner. */
   profile: ProfileView | null;
+  /**
+   * The last room this browser was in.
+   *
+   * Kept so a player who steps out of a lobby to look at their profile is offered the way
+   * back rather than being left on the home screen to find the code again. Rejoining is
+   * the ordinary join path, and the seat token reclaims their seat.
+   */
+  lastRoomId: string | null;
   /** Cards mode: your own hand. Null in team mode, or if you hold no seat. */
   hand: HandState | null;
   /** The card you have picked to pay for your next move; null lets the server choose. */
@@ -65,6 +73,7 @@ const state: AppState = {
   archived: null,
   account: null,
   profile: null,
+  lastRoomId: null,
   hand: null,
   selectedCardId: null,
   reviewPly: null,

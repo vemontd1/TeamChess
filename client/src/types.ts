@@ -278,6 +278,14 @@ export interface ProfileGame extends GameSummary {
 export interface ProfileView {
   profile: Profile;
   games: ProfileGame[];
+  /**
+   * Games finished per day, keyed `YYYY-MM-DD`, for the activity grid.
+   *
+   * Counted as games are recorded rather than derived from `games`, so the grid keeps
+   * counting after a game has fallen off the end of the list -- the list is capped, and a
+   * year of play would otherwise show a heatmap that quietly emptied from the left.
+   */
+  activity: Record<string, number>;
 }
 
 export interface Seat { color: Color; seatId: number; }
@@ -356,4 +364,6 @@ export type GameEnded =
 
 export interface MoveFx {
   captured: boolean; castle: boolean; promotion: boolean; check: boolean; auto: boolean;
+  /** Cards mode: this move was bought by burning a hand of cards. */
+  sacrifice: boolean;
 }
