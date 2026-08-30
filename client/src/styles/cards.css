@@ -29,26 +29,71 @@
   --tint-soft: rgba(138, 131, 120, 0.18);
 }
 
-/* ---- the table: what both sides can see ---- */
+/* ---- the other side of the table, above the board ---- */
+
+/*
+ * One strip, two lines: what the opponent is holding, and the rules of the deck. It sits
+ * between the captured tray and the board, so the enemy's cards are across the table from
+ * yours -- which is where a report asked for them, and where they belong.
+ */
+.opp-strip {
+  width: 100%;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.22);
+}
+.opp-strip[hidden] { display: none; }
 
 .cards-opp {
   display: flex;
-  flex-direction: column;
-  gap: calc(7px * var(--ui));
-  padding: calc(11px * var(--ui)) calc(15px * var(--ui));
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--ui)) calc(16px * var(--ui));
+  padding: calc(8px * var(--ui)) calc(14px * var(--ui));
   font-size: calc(12px * var(--ui));
   color: var(--text-dim);
 }
 
+.opp-hand { display: flex; align-items: center; gap: calc(8px * var(--ui)); min-width: 0; }
+.opp-who { font-size: calc(11.5px * var(--ui)); color: var(--text-dim); }
+.opp-split {
+  width: 1px;
+  height: calc(16px * var(--ui));
+  background: var(--panel-edge);
+  margin: 0 calc(4px * var(--ui));
+}
+.opp-spent {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: calc(10px * var(--ui));
+  border-left: 1px solid var(--panel-edge);
+}
+.opp-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(5px * var(--ui)) calc(8px * var(--ui));
+  margin-left: auto;
+  font-size: calc(10.5px * var(--ui));
+  color: var(--text-faint);
+}
+.opp-facts span {
+  padding: calc(2px * var(--ui)) calc(8px * var(--ui));
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(232, 176, 75, 0.08);
+  white-space: nowrap;
+}
+.opp-facts b { color: var(--text-dim); font-weight: 600; }
+
 .opp-row { display: flex; align-items: center; gap: 9px; }
-/* Sentences rather than shouted labels: these read "Black holds", "You have spent", and
-   uppercased letterspacing at 9.5px turned each of them into a puzzle. */
+/* Kept for the spent strip's own labels, where they still read as labels. */
 .opp-label, .spent-label {
   font-size: calc(11.5px * var(--ui));
   letter-spacing: 0.01em;
   color: var(--text-dim);
   flex: 0 0 auto;
-  min-width: calc(96px * var(--ui));
 }
 .opp-backs { display: flex; gap: 2px; flex: 1; min-width: 0; flex-wrap: wrap; }
 .opp-none { color: var(--text-faint); font-style: italic; }
@@ -158,16 +203,20 @@
 
 /* ---- the hand ---- */
 
-/* The hand and its two buttons. The gap is generous because the outermost cards lean out
-   of their own boxes, and a button tucked against a rotated corner reads as being on top
-   of it. */
+/* The hand takes the width that is left; the two buttons keep theirs. Neither can push
+   into the other, which is what the overlapping fan managed to do. */
 .cards-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: calc(26px * var(--ui));
-  flex-wrap: wrap;
+  gap: calc(18px * var(--ui));
+  flex-wrap: nowrap;
 }
+/* `flex: 1 1 0`, not `auto`: with an auto basis the hand's width depends on the cards and
+   the cards' width depends on the hand, and the browser resolves that circle against the
+   cards' natural size -- which left a five-card hand at two thirds of the room it had.
+   A zero basis makes the row decide the width first, and the slot arithmetic follows. */
+.cards-row .cards-hand { flex: 1 1 0; min-width: 0; }
 
 .cards-hand {
   display: flex;
@@ -175,72 +224,65 @@
   justify-content: center;
   align-items: flex-end;
   flex-wrap: wrap;
-  min-height: calc(var(--card-h) + 22px);
+  /*
+   * A fixed height, not a minimum.
+   *
+   * The cards shrink to fit the row, and a narrower card is a shorter one -- so a hand
+   * that got its height from its cards fed straight back into the board sizing that
+   * decided how wide the row was in the first place. Pinning the height to the tallest a
+   * card can be breaks the loop: a crowded hand sits lower in the same box, and the board
+   * never has to be measured twice.
+   */
+  height: calc(var(--card-h) + 22px);
   padding-top: 14px;          /* headroom for the lift, so a raised card is not clipped */
   perspective: 900px;         /* the deal arrives with a real tilt, not a flat slide */
   --n: 1;
 }
 
 /*
- * The fan.
+ * A row, not a fan.
  *
- * A hand of cards is held as a fan, and a row of upright rectangles reads as a toolbar --
- * which is what it was called in the report that asked for this. Each card is turned by
- * its distance from the middle of the hand and dropped by the square of it, so the tops
- * describe an arc rather than a line, and they overlap the way cards do.
+ * It was a fan for one afternoon, at a player's request, and it came back the other way:
+ * with a full hand the rotation made the middle cards hard to tell apart and the two on
+ * the ends leaned into whatever sat beside them. A row is what this hand wants -- seven
+ * faces to compare, all upright, none hiding another.
  *
- * `--i` is set per card and `--n` on the hand, so the geometry is here rather than in the
- * TypeScript: the shape of a fan is a question for a stylesheet.
- *
- * **Written with `rotate` and `translate`, never `transform`.** Everything else a card
- * does -- dealing in, being picked up, burning, refusing -- is a `transform`, and the
- * individual properties compose with it instead of replacing it. Put the fan in
- * `transform` and the deal animation flattens the hand for the length of its flight and
- * then snaps it back into shape, which is exactly what was reported: cards arriving in a
- * row and turning into a fan afterwards. Composed, a new card flies in already fanned and
- * lands in its slot without a single frame out of place.
+ * The row is sized so that the widest possible hand fits without wrapping or overflowing.
+ * Each card takes the smaller of its natural width and the share of the row it is entitled
+ * to, and its height follows from its width, so a full hand shrinks evenly instead of
+ * spilling. `--n` is set on the hand by the TypeScript; the rest is arithmetic.
  */
+.cards-hand {
+  --gap: calc(9px * var(--ui));
+  --slot: calc((100% - (var(--n) - 1) * var(--gap)) / var(--n));
+  gap: var(--gap);
+  flex-wrap: nowrap;
+}
+
 .cards-hand .card {
-  --mid: calc((var(--n) - 1) / 2);
-  --off: calc(var(--i, 0) - var(--mid));
-  rotate: calc(var(--off) * 4.5deg);
-  translate: 0 calc(var(--off) * var(--off) * 2.5px);
-  z-index: calc(10 + var(--i, 0));
+  width: min(var(--card-w), var(--slot));
+  height: auto;
+  max-height: var(--card-h);
+  aspect-ratio: 86 / 120;
+  min-width: 0;
 }
 
-/*
- * The overlap belongs *between* cards. On the outer edges it was pulling whatever sat next
- * to the hand in over the last card -- which is how the Mulligan and Sacrifice buttons
- * ended up sitting on top of the Queen.
- *
- * It also tightens as the hand grows, so a full hand of seven still leaves the buttons
- * beside it rather than wrapping them underneath. A real hand closes up the same way.
- */
-.cards-hand .card + .card {
-  margin-left: calc(var(--card-w) * -1 * (0.13 + max(0, var(--n) - 5) * 0.028));
-}
-
-/* Picked up, or under the pointer: straightened out of the fan and left to the lift its
-   own state already gives it, which is what makes the whole face readable at the moment
-   it matters. */
+/* Picked up, or under the pointer: lifted clear of the row, which is what makes the whole
+   face readable at the moment it matters. The lift is a `translate` and not a `transform`,
+   so that the deal, the burn and the refusal shake -- all of them transforms -- compose
+   with it rather than cancelling it. */
 .cards-hand .card:hover:not(.card-dead):not(.card-spent),
 .cards-hand .card:focus-visible,
 .cards-hand .card-on,
 .cards-hand .card-burn {
-  rotate: 0deg;
-  translate: 0 0;
+  translate: 0 -10px;
   z-index: 40;
 }
 
-/* Wrapping and fanning do not mix: a second row of a fan is two fans. */
+/* On a phone the slot arithmetic does the work on its own: seven cards in 390px means
+   seven narrow cards, which is exactly what it produces. */
 @media (max-width: 780px) {
-  .cards-hand { flex-wrap: nowrap; }
-  .cards-hand .card { rotate: 0deg; translate: 0 0; }
-  /* Same tightening as the desktop fan, a little harder: seven 56px cards and a phone
-     are not a comfortable pair. */
-  .cards-hand .card + .card {
-    margin-left: calc(var(--card-w) * -1 * (0.10 + max(0, var(--n) - 5) * 0.06));
-  }
+  .cards-hand { --gap: 5px; }
 }
 
 .card {
@@ -267,7 +309,6 @@
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   transition:
     transform 260ms var(--ease-out),
-    rotate 260ms var(--ease-out),
     translate 260ms var(--ease-out),
     border-color var(--dur-ui) var(--ease-out),
     box-shadow var(--dur-ui) var(--ease-out),
@@ -550,10 +591,10 @@
 .cards-actions {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: calc(8px * var(--ui));
-  flex: 0 0 auto;
+  flex: 0 0 calc(142px * var(--ui));
   align-items: stretch;
-  min-width: calc(132px * var(--ui));
 }
 
 .card-action {

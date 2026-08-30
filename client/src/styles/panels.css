@@ -530,7 +530,41 @@
 
 /* ---- game over ---- */
 
+/*
+ * The card a finished game puts up.
+ *
+ * Reported as "button formatting is bad on the winning form": four buttons of four
+ * different widths wrapping three-and-one, and a PGN link in the browser's default blue,
+ * which is the one colour this app does not contain. The buttons now share a two-up grid
+ * and the link wears the accent like every other link here.
+ */
 .go-crown { font-size: calc(46px * var(--ui)); line-height: 1; margin-bottom: 10px; }
+
+.go-saved {
+  margin: calc(16px * var(--ui)) 0 0;
+  font-size: calc(12px * var(--ui));
+  color: var(--text-faint);
+  line-height: 1.55;
+}
+.go-saved a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(232, 176, 75, 0.35);
+}
+.go-saved a:hover { border-bottom-color: var(--accent); }
+
+/* Two up, equal widths, and whatever is left over centred on the last row. */
+.go-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(9px * var(--ui));
+  margin-top: calc(18px * var(--ui));
+}
+.go-actions .btn { width: 100%; justify-content: center; }
+/* Only the primary action takes the full width; the rest pair off, so there is never a
+   hole in the grid beside a lone button. */
+.go-actions .go-wide { grid-column: 1 / -1; }
+
 
 .go-result {
   font-family: var(--font-display);

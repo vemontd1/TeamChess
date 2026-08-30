@@ -481,7 +481,10 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   chat.el.classList.add('panel-grow');
   // In cards mode the chat goes (a team of one has no audience) and the table takes its
   // place, so the left column stays useful in both modes.
-  leftCol.append(chat.el, cardHand.infoEl);
+  leftCol.append(chat.el);
+  // Across the table from you: the opponent's cards go above the board, between the
+  // captured tray and the board itself.
+  boardHost.parentElement!.insertBefore(cardHand.infoEl, boardHost);
   rightCol.append(timerPanel, movesPanel, statsPanel);
 
   // Only now: `applyLayout` moves the clock between columns, so it cannot run until the
@@ -565,6 +568,19 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   });
 
   net.onHand(hand => setState({ hand }));
+
+  /**
+   * A hand does not outlive its game.
+   *
+   * The server sends a hand while a game is running and simply stops when one ends, so
+   * the store went on holding the last one -- through Back to lobby, and into the next
+   * room the player created, where a lobby with no deck cut still showed six cards. The
+   * store is cleared the moment the room says it is not playing.
+   */
+  const forgetHandOffGame = (s: AppState): void => {
+    const st = s.room?.status;
+    if (s.hand && (st === 'lobby' || st == null)) setState({ hand: null });
+  };
 
   // The game reached the archive: remember its id so the result card can offer the PGN.
   net.onArchived(g => setState({ archived: g }));
@@ -662,11 +678,12 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       sizeBoard();
     }
 
-    // The hand and the table appear when there is a deal to show. In the lobby there is
-    // no hand and no discard -- the deck is not cut until the game starts -- so what stood
-    // here was an empty card-height box between the board and the buttons, reported as
-    // "area looks wrongly formatted". It was: it was an area of nothing.
-    const dealt = cardsMode && (s.hand != null || room.cards != null);
+    // The hand belongs to a game in progress. Gating on "is there a hand in the store"
+    // was not enough: the store keeps the last hand it was sent, so the cards were still
+    // on screen after Back to lobby, and followed the player into the *next* room they
+    // created. The room's own status is the only thing that actually knows.
+    const inPlay = room.status === 'playing' || room.status === 'finished';
+    const dealt = cardsMode && inPlay && (s.hand != null || room.cards != null);
     cardsHost.hidden = !dealt;
     cardHand.infoEl.hidden = !dealt;
     if (isCardsMode(s)) {
@@ -728,6 +745,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     // The turn is open and something was waiting for it.
     if (isMyTurn(s) && shown.live && premove && !firingPremove) void firePremove();
 
+    forgetHandOffGame(s);
     flushTurnReport(s);
     paintConstraint(s);
 
@@ -870,7 +888,9 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
         manage.push(`<button class="btn btn-sm btn-ghost" id="reset">Back to lobby</button>`);
       }
     } else if (room.status === 'finished' && isHost) {
-      main.push(`<button class="btn btn-primary btn-sm" id="rematch">Rematch</button>`);
+      // Under the clock beside Back to lobby, where it was asked for: the two things you
+      // do with a finished game belong together, and neither is about the position.
+      manage.push(`<button class="btn btn-sm btn-primary" id="rematch">Rematch</button>`);
       manage.push(`<button class="btn btn-sm btn-ghost" id="reset">Back to lobby</button>`);
     }
 
@@ -1013,6 +1033,27 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     }
   }
 
+  /**
+   * The buttons on the card a finished game puts up, two to a row.
+   *
+   * The rematch takes a row of its own because it is the one thing most people came back
+   * for; the rest pair off. Which of them exist depends on who you are and whether the
+   * game was long enough to be archived, so the odd one out is worked out here rather
+   * than left to a CSS rule that can only count children it cannot tell apart.
+   */
+  function goButtons(isHost: boolean, gameId: string | null): string {
+    const rest: string[] = [];
+    if (gameId) rest.push('<button class="btn" id="goreport">Your report</button>');
+    rest.push('<button class="btn" id="goreview">Review the game</button>');
+    rest.push('<button class="btn btn-ghost" id="goclose">Close</button>');
+    if (rest.length % 2 === 1) {
+      rest[rest.length - 1] = rest[rest.length - 1].replace('class="btn', 'class="go-wide btn');
+    }
+    const lead = isHost
+      ? '<button class="btn btn-primary go-wide" id="goagain">Rematch</button>' : '';
+    return lead + rest.join('');
+  }
+
   function showGameOver(room: RoomState, isHost: boolean, gameId: string | null): void {
     const w = room.gameOver?.winner;
     const title = w === 'draw' ? 'Draw'
@@ -1026,12 +1067,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       ${gameId ? `<p class="go-saved">Saved to your profile — you can step back through it
         here, or <a href="${net.pgnUrl(gameId)}" target="_blank" rel="noopener">take the
         PGN</a>.</p>` : ''}
-      <div class="btn-row" style="justify-content:center;margin-top:20px">
-        ${isHost ? '<button class="btn btn-primary" id="goagain">Rematch</button>' : ''}
-        ${gameId ? '<button class="btn" id="goreport">Your report</button>' : ''}
-        <button class="btn" id="goreview">Review the game</button>
-        <button class="btn btn-ghost" id="goclose">Close</button>
-      </div>`);
+      <div class="go-actions">${goButtons(isHost, gameId)}</div>`);
     renderStats(host.querySelector<HTMLElement>('#gostats')!, room);
     host.querySelector('#goclose')!.addEventListener('click', close);
     host.querySelector('#goreview')!.addEventListener('click', () => { close(); step(0); });

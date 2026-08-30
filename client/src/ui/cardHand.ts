@@ -109,12 +109,12 @@ export class CardHand {
   /** The hand itself, which belongs under the board where the doc puts it. */
   readonly el: HTMLElement;
   /**
-   * The table: what the opponent holds, and what both sides have spent.
+   * The other side of the table: what the opponent holds, and what has been spent.
    *
-   * This lives in a side column rather than between the board and the hand. It is
-   * reference material -- read between turns, not during a move -- and a hundred pixels
-   * of it stacked under the board was costing the board a hundred pixels of size, which
-   * is the one thing on screen that cannot be read anywhere else.
+   * A strip above the board rather than a panel in a side column. It was the latter, and
+   * the report that changed it asked for the enemy's cards to be above the table where
+   * they belong -- which is right, and costs the board nothing, because one line of card
+   * backs is not the hundred pixels the panel was avoiding.
    */
   readonly infoEl: HTMLElement;
   private handEl: HTMLElement;
@@ -150,11 +150,9 @@ export class CardHand {
     this.actionsEl = this.el.querySelector('#actions')!;
     this.noteEl = this.el.querySelector('#note')!;
 
-    this.infoEl = document.createElement('section');
-    this.infoEl.className = 'panel edge cards-table';
-    this.infoEl.innerHTML = `
-      <div class="panel-head"><span class="panel-title">The table</span></div>
-      <div class="cards-opp" id="opp"></div>`;
+    this.infoEl = document.createElement('div');
+    this.infoEl.className = 'opp-strip';
+    this.infoEl.innerHTML = `<div class="cards-opp" id="opp"></div>`;
     this.oppEl = this.infoEl.querySelector('#opp')!;
 
     this.paintMotion(motionLevel());
@@ -279,72 +277,58 @@ export class CardHand {
   // ---- the opponent's side of the table ----
 
   /**
-   * The table: everything about the cards that is not somebody's hand.
+   * The other side of the table, as a strip above the board.
    *
-   * Rewritten after a report that said, in full, "not informative hard to understand".
-   * It was right. The panel showed a row of card backs, two rows of unlabelled piece
-   * silhouettes under the words SPENT and YOURS, and a line reading "Deck 26 Deal 2 Cap 7
-   * Sacrifice 3" -- four numbers with no units and no verbs between them. Every one of
-   * those was legible only to someone who already knew what it meant, which is nobody the
-   * panel is for.
+   * It was a panel in the side column called "The table", and the report asked for the
+   * enemy's card backs above the board instead and for the widget itself to go. That is
+   * the better place for them: an opponent's hand is a thing you look at across a board,
+   * not a paragraph in a sidebar, and putting it there costs a column that the roster and
+   * the chat can use.
    *
-   * Now every row is a sentence: who holds how many, who has spent what, and what the
-   * table's rules cost, written out. The pictures stay -- a spent knight is quicker to
-   * recognise as a knight than as the word -- but nothing is carried by a picture alone.
+   * Nothing is lost on the way. The backs carry the count, their spent pile keeps its
+   * face-up record, and the four facts about the deck that were chips in the panel are
+   * chips here -- smaller, on one line, and next to the only thing that makes them
+   * meaningful.
    */
   private renderOpponent(cards: CardsPublic | null, myColor: Color | null): void {
     if (!cards) { this.oppEl.innerHTML = ''; return; }
     const me = myColor ? cards[myColor] : null;
     const oppColor: Color = myColor === 'white' ? 'black' : 'white';
     const opp = cards[oppColor];
-
     const name = (c: Color): string => (c === 'white' ? 'White' : 'Black');
 
-    const holds = (color: Color, side: CardSidePublic): string => {
-      const backs = Array.from({ length: side.handCount },
-        (_, i) => `<span class="card-back" style="--i:${i}"></span>`).join('');
-      return `<div class="opp-row">
-        <span class="opp-label">${name(color)} holds</span>
-        <span class="opp-backs">${backs
-          || '<span class="opp-none">an empty hand</span>'}</span>
-        <span class="opp-count">${side.handCount === 0 ? ''
-          : `${side.handCount} card${side.handCount === 1 ? '' : 's'}`}</span>
-      </div>`;
-    };
+    const backs = (side: CardSidePublic): string => Array.from(
+      { length: side.handCount },
+      (_, i) => `<span class="card-back" style="--i:${i}"></span>`).join('');
 
-    const spent = (label: string, side: CardSidePublic, color: Color): string => {
-      const n = side.played.length;
-      return `<div class="spent-row${label === 'You have spent' ? ' spent-mine' : ''}">
-        <span class="spent-label">${label}</span>
-        ${spentStrip(side.played, color)}
-        <span class="spent-count">${n === 0 ? 'nothing yet'
-          : `${n} card${n === 1 ? '' : 's'}`}</span>
-      </div>`;
-    };
+    const hand = (color: Color, side: CardSidePublic): string => `
+      <span class="opp-who">${name(color)}</span>
+      <span class="opp-backs">${backs(side)
+        || '<span class="opp-none">no cards</span>'}</span>
+      <span class="opp-count">${side.handCount}</span>`;
 
-    // A spectator holds no hand, so they get both sides rather than one side and a blank
-    // where theirs would be.
-    const rows = me
-      ? `${holds(oppColor, opp)}
-         ${spent(`${name(oppColor)} has spent`, opp, oppColor)}
-         ${spent('You have spent', me, myColor!)}`
-      : `${holds('white', cards.white)}
-         ${holds('black', cards.black)}
-         ${spent('White has spent', cards.white, 'white')}
-         ${spent('Black has spent', cards.black, 'black')}`;
+    // A spectator holds no hand of their own, so they are shown both.
+    const hands = me
+      ? hand(oppColor, opp)
+      : `${hand('white', cards.white)}<span class="opp-split"></span>${
+        hand('black', cards.black)}`;
+
+    const spentOf = (side: CardSidePublic, color: Color): string =>
+      (side.played.length === 0 ? '' : `<span class="opp-spent"
+        title="${name(color)} has spent ${side.played.length} card(s)">
+        ${spentStrip(side.played, color)}</span>`);
 
     this.oppEl.innerHTML = `
-      ${rows}
-      <div class="cards-meta">
+      <div class="opp-hand">${hands}${spentOf(opp, oppColor)}</div>
+      <div class="opp-facts">
         <span title="Cards still to be dealt from ${me ? 'your' : 'that'} draw pile">
-          <b>${me ? me.deckCount : opp.deckCount}</b> left in the deck</span>
+          <b>${me ? me.deckCount : opp.deckCount}</b> in deck</span>
         <span title="Dealt at the start of every turn, up to the hand cap">
-          <b>${cards.drawPerTurn}</b> dealt a turn</span>
+          <b>${cards.drawPerTurn}</b> a turn</span>
         ${capMeta(cards, me)}
         ${sacrificeMeta(cards, me)}
         ${cards.enraged
-          ? `<span class="meta-hot" title="Twenty plies in, both sides deal one more">
-              enraged: one extra card a turn</span>`
+          ? '<span class="meta-hot" title="Twenty plies in, both sides deal one more">enraged</span>'
           : ''}
       </div>`;
   }

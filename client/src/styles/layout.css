@@ -93,6 +93,16 @@
   gap: calc(16px * var(--ui));
 }
 
+/*
+ * Everything but the board runs the board's full width.
+ *
+ * The column centres its children, so a row that did not say otherwise was as wide as its
+ * own contents -- and the hand, which sizes its cards from the width it is given, was
+ * therefore sizing itself from the cards. That circle resolved against the cards' natural
+ * width and left a five-card hand in two thirds of the room it actually had.
+ */
+.board-column > *:not(#board) { align-self: stretch; }
+
 .side-column {
   display: flex;
   flex-direction: column;
@@ -311,8 +321,25 @@
 /* The home card is one tall column of controls, so its rhythm tightens as the interface
    scales rather than growing with it -- otherwise scaling type for a big monitor is what
    pushes the Create button below the fold on a 1080p one. */
-.home {
+/*
+ * Every page is a column inside the app, and the page itself takes what is left.
+ *
+ * `.home` asked for a full viewport of its own, under an app bar that is not part of it,
+ * so the document was always a bar's height taller than the window and the main screen
+ * always had a scrollbar with nothing below the fold -- which is exactly how it was
+ * reported. Flexing the page against the shell means no page has to know how tall the bar
+ * happens to be.
+ */
+#app {
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+#app > .home,
+#app > .page { flex: 1 1 auto; }
+
+.home {
+  min-height: 0;
   display: grid;
   place-items: center;
   padding: clamp(20px, calc(46px / var(--ui)), 48px) 20px;
