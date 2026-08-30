@@ -1,7 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import type {
   RoomState, JoinResult, RoomConfig, Color, MovePayload, MoveFx, ChatMessage, MarkView,
-  GameEnded, HandState,
+  GameEnded, HandState, ProfileView, ArchivedGame, GameSummary,
 } from '../types';
 import { setState } from '../state/store';
 
@@ -89,6 +89,42 @@ export function sendMove(m: MovePayload): Promise<boolean> {
   });
 }
 
+// ---- the archive and profiles ----
+
+/**
+ * Your own profile and the games on it.
+ *
+ * The token goes in the payload because the home screen asks for this before it has
+ * joined any room, so the socket has no token of its own to read yet. It is this
+ * browser's own secret in both directions.
+ */
+export function myProfile(limit = 25): Promise<ProfileView | null> {
+  return new Promise(resolve => {
+    sock().emit('profile:me', { token: getToken(), limit },
+      (res: ProfileView | null) => resolve(res));
+  });
+}
+
+/** Finished games are plain HTTP: they are static once written, and cacheable. */
+export async function fetchGame(id: string): Promise<ArchivedGame | null> {
+  try {
+    const res = await fetch(`/api/games/${encodeURIComponent(id)}`);
+    return res.ok ? (await res.json()) as ArchivedGame : null;
+  } catch { return null; }
+}
+
+export async function fetchRecentGames(limit = 20): Promise<GameSummary[]> {
+  try {
+    const res = await fetch(`/api/games?limit=${limit}`);
+    return res.ok ? (await res.json()) as GameSummary[] : [];
+  } catch { return []; }
+}
+
+/** Where a game's PGN lives, for the download link on the review screen. */
+export function pgnUrl(id: string): string {
+  return `/api/games/${encodeURIComponent(id)}/pgn`;
+}
+
 // ---- inbound side-effect events ----
 
 /**
@@ -121,3 +157,5 @@ export function onHand(fn: (h: HandState | null) => void): void { bind('cards:ha
 export function onMulliganed(fn: (e: { color: Color }) => void): void {
   bind('cards:mulliganed', fn);
 }
+/** A finished game reached the archive, and can now be reviewed by its id. */
+export function onArchived(fn: (g: GameSummary) => void): void { bind('game:archived', fn); }

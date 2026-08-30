@@ -20,8 +20,8 @@
  */
 import { Chess } from 'chess.js';
 import {
-  TUNING, createCards, drawUpTo, drawBonus, drawTargetFor, extinctTypes, replaceExtinct,
-  resolveSpend, commitSpend, cardPlayable, cardCovers,
+  TUNING, createCards, drawCards, drawBonus, drawPerTurnFor, extinctTypes, replaceExtinct,
+  cycleForPlayable, resolveSpend, commitSpend, cardPlayable, cardCovers,
 } from '../server/src/cards.ts';
 
 /** Set BALANCE_NO_SWAP=1 to measure without the extinct-card replacement, for comparison. */
@@ -46,7 +46,7 @@ function simulate() {
   const s = {
     turns: 0, open: 0, moveCov: 0, typeCov: 0, emergency: 0, wild: 0,
     distinct: 0, handSize: 0, stuckToKing: 0, plies: 0, games: 0,
-    swapped: 0, swapTurns: 0, deadHeld: 0,
+    swapped: 0, swapTurns: 0, deadHeld: 0, cycled: 0, atCap: 0,
     lateTurns: 0, lateOpen: 0, lateMoveCov: 0, lateTypeCov: 0,
     lateEmergency: 0, lateDead: 0, lateSwap: 0,
   };
@@ -63,7 +63,9 @@ function simulate() {
       // exactly what the server does at the start of a turn. `moves()` dominates the
       // runtime, so it is generated once here and the movable-type set derived from it,
       // rather than letting movableTypes/refreshEmergency each regenerate it.
-      drawUpTo(side, drawTargetFor(ply));
+      // The opening hand is the deal for each side's first turn, exactly as the server
+      // has it -- dealing on plies 0 and 1 as well would measure a hand nobody is dealt.
+      if (ply > 1) drawCards(side, drawPerTurnFor(ply));
       if (SWAP) {
         const swapped = replaceExtinct(side, extinctTypes(chess, color));
         s.swapped += swapped.length;
@@ -72,6 +74,9 @@ function simulate() {
 
       const legal = chess.moves({ verbose: true });
       if (legal.length === 0) break;
+      // cycling is part of the live engine, so the harness runs it too -- otherwise this
+      // measures a hand the server would never have left the player holding
+      if (!chess.inCheck()) s.cycled += cycleForPlayable(side, chess).length;
       const movable = new Set(legal.map(m => m.piece));
       side.emergency = side.hand.length === 0
         || !side.hand.some(c => cardPlayable(c, movable));
@@ -102,6 +107,7 @@ function simulate() {
       if (late) s.lateDead += deadNow;
       s.distinct += new Set(side.hand.map(c => c.kind)).size;
       s.handSize += side.hand.length;
+      if (side.hand.length >= TUNING.handMax) s.atCap++;
       // the pinch that actually hurts: the only thing you may move is the king
       if (affordable.every(m => m.piece === 'k')) s.stuckToKing++;
 
@@ -125,6 +131,8 @@ function simulate() {
     handSize: per(s.handSize),
     swapTurns: per(s.swapTurns),
     deadHeld: per(s.deadHeld),
+    cycled: per(s.cycled),
+    atCap: per(s.atCap),
     late: s.lateTurns === 0 ? null : {
       open: s.lateOpen / s.lateTurns,
       moveCov: s.lateMoveCov / s.lateTurns,
@@ -150,7 +158,7 @@ function row(name, r) {
   console.log(
     `  ${name.padEnd(30)} ${pct(r.open)} ${pct(r.moveCov)} ${pct(r.typeCov)} `
     + `${pct(r.emergency)} ${pct(r.wild)} ${pct(r.stuckToKing)} ${num(r.distinct)} `
-    + `${num(r.handSize)} ${pct(r.swapTurns)} ${num(r.deadHeld)}`);
+    + `${num(r.handSize)} ${pct(r.atCap)} ${num(r.cycled)} ${num(r.deadHeld)}`);
 }
 
 function header() {
@@ -158,29 +166,44 @@ function header() {
     `  ${'tuning'.padEnd(30)} ${'open'.padStart(6)} ${'moves'.padStart(6)} `
     + `${'types'.padStart(6)} ${'emerg'.padStart(6)} ${'wild'.padStart(6)} `
     + `${'king'.padStart(6)} ${'kinds'.padStart(5)} ${'hand'.padStart(5)} `
-    + `${'swap'.padStart(6)} ${'dead'.padStart(5)}`);
-  console.log(`  ${'-'.repeat(30)} ------ ------ ------ ------ ------ ------ ----- ----- ------ -----`);
+    + `${'cap'.padStart(6)} ${'cyc'.padStart(5)} ${'dead'.padStart(5)}`);
+  console.log(`  ${'-'.repeat(30)} ------ ------ ------ ------ ------ ------ ----- ----- ------ ----- -----`);
 }
 
 const D = {
   /** The design doc's own list, for reference: this is what measured too loose. */
-  doc:   [['pawn', 10], ['knight', 7], ['bishop', 7], ['rook', 5], ['queen', 3], ['wild', 4]],
+  doc:     [['pawn', 10], ['knight', 7], ['bishop', 7], ['rook', 5], ['queen', 3], ['wild', 4]],
   /** The doc's shape with Wild cut to one, padded back to 36. */
-  tight: [['pawn', 11], ['knight', 8], ['bishop', 8], ['rook', 5], ['queen', 3], ['wild', 1]],
+  tight:   [['pawn', 11], ['knight', 8], ['bishop', 8], ['rook', 5], ['queen', 3], ['wild', 1]],
   /** More duplicates still -- fewer distinct kinds per hand, but pawns cover more moves. */
-  heavy: [['pawn', 14], ['knight', 8], ['bishop', 7], ['rook', 4], ['queen', 2], ['wild', 1]],
+  heavy:   [['pawn', 14], ['knight', 8], ['bishop', 7], ['rook', 4], ['queen', 2], ['wild', 1]],
+  /** Heavier again: the cheapest way to keep a seven-card hand down to a few kinds. */
+  heavier: [['pawn', 17], ['knight', 8], ['bishop', 6], ['rook', 3], ['queen', 1], ['wild', 1]],
   /** Fewer pawns: lowest move coverage of all, at the cost of a much busier safety net. */
-  light: [['pawn', 6], ['knight', 8], ['bishop', 8], ['rook', 8], ['queen', 5], ['wild', 1]],
+  light:   [['pawn', 6], ['knight', 8], ['bishop', 8], ['rook', 8], ['queen', 5], ['wild', 1]],
 };
 
+/**
+ * The retune, measured against what shipped before it.
+ *
+ * The economy changed shape as well as size: an opening hand of one card per kind, a
+ * fixed deal of two a turn against a one-card move cost, and section 10's cap of seven.
+ * The old refill-to-a-target rows are kept for comparison -- they are what the numbers in
+ * `docs/BALANCE.md` were taken against. A refill is a deal of "as many as will fit" into
+ * a cap that is itself the target, which is exactly what the old code did.
+ */
+const REFILL = target => ({ openingKinds: new Array(target).fill('pawn'),
+                            drawPerTurn: 99, enrageDrawPerTurn: 99, handMax: target });
+
 const CANDIDATES = [
-  ['doc: hand 5, 4 wild', { deck: D.doc, drawTarget: 5, enrageDrawTarget: 6 }],
-  ['tight deck, hand 5', { deck: D.tight, drawTarget: 5, enrageDrawTarget: 6 }],
-  ['tight deck, hand 4', { deck: D.tight, drawTarget: 4, enrageDrawTarget: 5 }],
-  ['tight deck, hand 3', { deck: D.tight, drawTarget: 3, enrageDrawTarget: 4 }],
-  ['heavy deck, hand 3', { deck: D.heavy, drawTarget: 3, enrageDrawTarget: 4 }],
-  ['light deck, hand 3', { deck: D.light, drawTarget: 3, enrageDrawTarget: 4 }],
-  ['tight deck, hand 2', { deck: D.tight, drawTarget: 2, enrageDrawTarget: 3 }],
+  ['old: refill to 3, tight', { deck: D.tight, ...REFILL(3) }],
+  ['old: refill to 5, tight', { deck: D.tight, ...REFILL(5) }],
+  ['deal 2 cap 7, tight', { deck: D.tight }],
+  ['deal 2 cap 7, heavy', { deck: D.heavy }],
+  ['deal 2 cap 7, heavier', { deck: D.heavier }],
+  ['deal 2 cap 6, heavy', { deck: D.heavy, handMax: 6 }],
+  ['deal 2 cap 5, heavy', { deck: D.heavy, handMax: 5 }],
+  ['deal 1 cap 7, heavy', { deck: D.heavy, drawPerTurn: 1, enrageDrawPerTurn: 2 }],
 ];
 
 console.log(`\nChess Cards balance — ${GAMES} games, up to ${MAX_PLIES} plies each`);

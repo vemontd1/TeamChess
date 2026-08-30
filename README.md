@@ -31,9 +31,8 @@ clock run down.
 
 ## Chess Cards
 
-You hold a hand of three. Each card names a piece type, and you may only move a piece you
-hold the card for; playing it spends it. **The king never needs a card**, so no hand can
-lock you out of the game.
+Each card names a piece type, and you may only move a piece you hold the card for; playing
+it spends it. **The king never needs a card**, so no hand can lock you out of the game.
 
 ```
   hand                          board
@@ -47,21 +46,30 @@ One fixed 36-card deck per side, the same for both players — no deckbuilding:
 
 | Pawn | Knight | Bishop | Rook | Queen | Wild |
 |---|---|---|---|---|---|
-| 11 | 8 | 8 | 5 | 3 | 1 |
+| 14 | 8 | 7 | 4 | 2 | 1 |
 
 A **Wild** moves anything. One copy in thirty-six: a rare universal answer, not a normal
 turn.
 
-**The loop.** Draw back up to three at the start of your turn, play one card, make one
-ordinary chess move. The spent card goes face up on your discard; when your deck runs out
-the discard is reshuffled into a new one. You may hold up to **seven** — past that you stop
-drawing, so a card kept back for a future threat is a card you are not replacing.
+**The loop.** You open on **one card for each piece kind** — Pawn, Knight, Bishop, Rook,
+Queen — so no game starts stuck and the first turn offers you the whole board. After that
+**two cards are dealt at the start of every turn**, and a move costs one, so a quiet turn
+leaves you a card richer. The spent card goes face up on your discard; when your deck runs
+out the discard is reshuffled into a new one. The hand caps at **seven**, and at the cap
+the deal simply does not happen.
 
 **Tempo.** A capture draws you an extra card at the end of the turn. Going forward widens
 the hand that has to sustain going forward.
 
-**Soft enrage.** From the twentieth ply both sides draw to four instead of three, so the
-endgame stops hanging on a bad draw.
+**Soft enrage.** From the twentieth ply both sides are dealt three a turn instead of two,
+so the endgame stops hanging on a bad draw.
+
+**Sacrifice.** Once every ten plies you may burn **three cards** from your hand to move any
+piece you like. This is the answer to the mode's sharpest moment — seeing the winning move
+and holding the wrong cards for it. It costs most of a hand and two turns of dealing, and
+the cooldown is what keeps it the way a game is rescued rather than the way it is played.
+Pick **Sacrifice**, choose the three cards to burn, then move. Dead cards count as fuel,
+which is often the point; the king is excluded, since he was free anyway.
 
 **A card cannot outlive its piece.** Trade off both knights and any Knight cards you are
 holding are swapped for fresh ones at the start of your next turn — they go back to the
@@ -70,24 +78,31 @@ the bishop you *have* is a position to solve; holding a card for a bishop that n
 exists is just a smaller hand. Only extinction triggers this, never a piece that is merely
 blocked.
 
-**Nobody gets stuck.** Two safety nets, in the order they fire:
+**Nobody gets stuck.** Three safety nets, in the order they fire:
 
+- **Cycling** — if nothing in your hand can move anything, dead cards are dealt past, one
+  at a time, until something can. Free, automatic, and reported to you when it happens.
+  Its only cost is the deck: the cards come back around later.
 - **Mulligan** — once a game, at the start of your turn, throw the whole hand away and take
-  a fresh one. You still owe a move.
-- **Emergency move** — if no card in your hand can move *anything*, a red Emergency card
-  appears in it. It moves any piece you like, and costs one card taken at random from the
-  hand you could not use anyway.
+  a fresh opening hand of one card per piece kind. You still owe a move.
+- **Emergency move** — for the one case cycling must not answer: **in check**, with a hand
+  that can do nothing about it. A red Emergency card appears; it moves any piece you like,
+  and costs one card taken at random from the hand you could not use anyway.
 
 So the absence of a card never mates you. Mate only ever comes out of the position.
 
-**The numbers are not the design doc's.** Its suggested hand of five and four Wilds measured
-far too loose — the cards were inert on a third of all turns — and the first playtest said
-so. `docs/BALANCE.md` has the simulation, the table, and why the shipped hand is three with
-a single Wild; `npm run balance` re-runs it.
+**The numbers have been tuned twice, in opposite directions.** The design doc's hand of
+five with four Wilds measured far too loose; cutting to three with a single Wild measured
+well and *played* thin. The shipped economy is the second correction — a bigger hand that
+is dealt into rather than refilled — and it is a real loosening: the cards are inert on
+about a quarter of turns rather than one in twenty. `docs/BALANCE.md` has both sweeps, what
+the loosening cost, and the one constant (`handMax`) to change if it needs tightening.
+`npm run balance` re-runs it.
 
-**What your opponent can see.** The size of your hand, and every card you have spent, face
-up. Never the hand itself — hands travel to one socket, not in the broadcast room state, so
-there is nothing to read in the network tab either.
+**What your opponent can see.** The size of your hand, every card you have spent face up,
+and how long until your sacrifice comes off cooldown. Never the hand itself — hands travel
+to one socket, not in the broadcast room state, so there is nothing to read in the network
+tab either.
 
 ## Rules and options
 
@@ -118,6 +133,63 @@ the duration against its own clock. Subtracting a server epoch from a local `Dat
 correct exactly as long as the two machines agree about the time, and they do not: the
 deployed host ran half a minute behind a player's PC, which pinned every 30-second
 countdown at zero for the whole game. A duration has no clock inside it to disagree with.
+
+## Stepping back through a game
+
+Every ply the server records carries the position it produced, not just the move that made
+it. Reviewing is therefore a seek rather than a replay: no move generator runs at either
+end, and the position you are shown is the one that was played rather than a
+reconstruction of it.
+
+Click any move in the history to put that position on the board. The board turns gold and
+says **reviewing**, and the arrow keys, `Home` and `End` step through the game; `Esc` or
+the **Live** button comes back.
+
+Reviewing is a lens, not a pause. **The clock keeps running and the game keeps going** —
+looking back four moves cannot cost you the position you were about to play, and it cannot
+cost your opponent anything either. While you are back there the board will not let you
+move or mark a square, since neither would land where you are looking.
+
+## Games are kept
+
+A finished game is written to disk as JSON — one file per game, under `GAMES_DIR`
+(default `data/games`). What is kept is the whole game: every ply with its position, the
+final FEN, who played, and how it ended. A game abandoned in progress is kept too, and
+scores nothing.
+
+| endpoint | what it gives you |
+|---|---|
+| `GET /api/games?limit=N` | recent games, newest first |
+| `GET /api/games/:id` | one whole game, ready to review |
+| `GET /api/games/:id/pgn` | the same game as standard PGN |
+| `GET /api/profile/:id` | one profile and its games |
+
+The PGN is ordinary PGN, so a game can leave this app entirely and open in anything that
+reads chess. The card mode's extras have no PGN representation; the ones that change how a
+move came about — the clock playing it, a bot playing it — are written as comments rather
+than dropped.
+
+On a host with an ephemeral filesystem — a plain container, including Railway without a
+volume attached — the archive survives restarts but not redeploys. Point `GAMES_DIR` at a
+mounted volume to make it durable.
+
+## Profiles
+
+Deliberately thin, and worth being plain about what they are. There is **no account and
+nothing to log into**: the token your browser already keeps in order to reclaim your seat
+after a refresh *is* the identity, so a profile appears by itself the first time you finish
+a game.
+
+It holds a name, a win/draw/loss tally, and the games behind it — every one of which opens
+in a replay you can step through. It shows up under the join box on the home screen.
+
+The token never becomes the profile id. That token is a bearer credential — hand it out in
+a URL and you have handed out the seats it can reclaim — so the id is a hash of it: stable,
+derivable without a lookup table, and useless to anyone who reads it off a link. Profiles
+live under `PROFILES_DIR` (default `data/profiles`), one JSON file each.
+
+The limits follow from having no account, and they are real: clear the browser's storage,
+or play from another device, and that is a different player.
 
 ## Running it
 
@@ -161,12 +233,22 @@ duration rather than only as an epoch, and that team chat and ghost marks reach 
 own team and nobody else.
 
 For Chess Cards it plays both sides of a real game for thirty-odd plies, choosing only moves
-the hand can pay for, and asserts at every ply that the draw refilled to the right target,
-that a king move spent nothing and any other move spent exactly one card, that a capture
-drew its tempo card, that the hand never passed seven, and that the public count matches the
-real hand. It also checks that a card-less move is refused, that a takeback puts the exact
-hand back, that the clock's forced move is one the hand could have paid for, and that no
-card identity appears anywhere in the broadcast state.
+the hand can pay for, and asserts at every ply that the opening hand held one card per piece
+kind, that a turn deals what it says it deals, that a king move spent nothing and any other
+move spent exactly one card, that a capture drew its tempo card, that the hand never passed
+the cap, and that the public count matches the real hand. It also checks that a card-less
+move is refused, that a takeback puts the exact hand back, that the clock's forced move is
+one the hand could have paid for, and that no card identity appears anywhere in the
+broadcast state. The sacrifice gets its own section: refused short of the price, refused
+for a repeated card, refused inside its cooldown, and — when paid — burning exactly the
+cards it named and no others.
+
+The last two sections cover what a game leaves behind. Every recorded ply is replayed
+through a real engine to prove its stored FEN is the position that ply actually produced,
+which is what makes review work at all; and a game is played to a real checkmate to check
+that it reaches the archive, comes back whole over HTTP, comes out as PGN, and lands on
+both players' profiles as a win and a loss — under a profile id that is not the token
+that would reclaim their seats.
 
 `test/cards.mjs` covers the engine directly, because the deck is shuffled and the paths that
 only open on an unlucky hand — the emergency move, a deck running dry — would otherwise go
@@ -193,6 +275,9 @@ sending everything to everyone and asking the client to hide it.
 - In Chess Cards, hover a card to preview what it can move, click it to commit the board to
   it, or just move a piece and the matching card is spent for you — the exact card before a
   Wild, and a Wild before the emergency move. Pieces you cannot reach this turn are dimmed.
+- To **sacrifice**, press the button, click three cards to burn, then move any piece.
+- **←** / **→** step back and forward through the game, **Home** / **End** jump to either
+  end, **Esc** returns to the live position. Clicking a move in the history does the same.
 - **F** — flip the board. **M** — mute. **E** — visual effects on/off.
 - **C** — jump to the chat box. **B** — jump back to the board.
 - The board only glows and accepts input when it is genuinely your turn.
@@ -236,6 +321,16 @@ happens to be drawn in JavaScript.
 In Chess Cards this is the difference between the Wild shimmering and sitting still. Cards
 dealing in and being spent are not affected by any of it: those are how you see the hand
 change, and hiding them would not calm the interface, only make it lie.
+
+### If the fire is beside the clock rather than on it
+
+That was a bug, and it is fixed. The ring is sized in CSS as `152px * var(--ui)`, so on a
+large display it is drawn bigger than the 152-unit design grid — and the fire canvas was
+pinned to a constant 244px box with a constant inset, which put it over the wrong circle
+by roughly the amount `--ui` had grown. The canvas now measures the ring with a
+`ResizeObserver` and applies the display scale as a single canvas transform, which keeps
+the particle sizes, glow widths and bloom in proportion and tracks a window resize, a
+scale step and a browser zoom alike.
 
 ## Sizing
 

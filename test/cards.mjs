@@ -10,16 +10,17 @@
  */
 import { Chess } from 'chess.js';
 import {
-  TUNING, deckSize, createCards, drawUpTo, drawBonus, drawTargetFor, isEnraged,
-  movableTypes, cardPlayable, cardCovers, refreshEmergency, resolveSpend, commitSpend,
-  mulligan, cardsPublic, handView, snapshotCards, extinctTypes, replaceExtinct,
+  TUNING, deckSize, createCards, dealOpening, drawCards, drawBonus, drawPerTurnFor,
+  isEnraged, movableTypes, cardPlayable, cardCovers, refreshEmergency, resolveSpend,
+  commitSpend, mulligan, cardsPublic, handView, snapshotCards, extinctTypes,
+  replaceExtinct, cycleForPlayable, canSacrifice, sacrificeReadyIn, resolveSacrifice,
   EMERGENCY_CARD_ID,
 } from '../server/src/cards.ts';
 
 /* Assertions read the tuning rather than restating it, so retuning the mode does not
    mean rewriting the tests -- only the composition block below, which is the one place
    the shipped numbers are deliberately pinned. */
-const HAND = TUNING.drawTarget;
+const HAND = TUNING.openingKinds.length;
 const DECK = deckSize();
 
 let failures = 0;
@@ -37,7 +38,8 @@ function handOf(...kinds) {
 function bareSide(...kinds) {
   return {
     hand: handOf(...kinds), deck: [], discard: [], mulliganUsed: false,
-    played: [], emergenciesUsed: 0, emergency: false, lastReplaced: [],
+    played: [], emergenciesUsed: 0, emergency: false, lastReplaced: [], lastCycled: [],
+    sacrificesUsed: 0, lastSacrificePly: null, openedTurns: 0,
   };
 }
 
@@ -47,7 +49,8 @@ function stockedSide(hand, deck) {
     hand: handOf(...hand),
     deck: deck.map((kind, i) => ({ id: 2000 + i, kind })),
     discard: [], mulliganUsed: false,
-    played: [], emergenciesUsed: 0, emergency: false, lastReplaced: [],
+    played: [], emergenciesUsed: 0, emergency: false, lastReplaced: [], lastCycled: [],
+    sacrificesUsed: 0, lastSacrificePly: null, openedTurns: 0,
   };
 }
 
@@ -59,15 +62,19 @@ const all = [...cards.white.hand, ...cards.white.deck];
 const tally = {};
 for (const c of all) tally[c.kind] = (tally[c.kind] ?? 0) + 1;
 check('thirty-six cards per side', all.length === 36, String(all.length));
-check('eleven pawns', tally.pawn === 11, String(tally.pawn));
-check('eight knights', tally.knight === 8, String(tally.knight));
-check('eight bishops', tally.bishop === 8, String(tally.bishop));
-check('five rooks', tally.rook === 5, String(tally.rook));
-check('three queens', tally.queen === 3, String(tally.queen));
+const composed = Object.fromEntries(TUNING.deck);
+check('the tally matches the tuning',
+  Object.entries(composed).every(([kind, n]) => tally[kind] === n), JSON.stringify(tally));
 check('a single wild', tally.wild === 1, String(tally.wild));
-check('the opening hand is three', HAND === 3, String(HAND));
+check('the opening hand is one card per piece kind', HAND === 5, String(HAND));
 check('both sides open on a full hand',
   cards.white.hand.length === HAND && cards.black.hand.length === HAND);
+check('and it holds exactly one of each kind, so no game starts stuck', (() => {
+  const kinds = cards.white.hand.map(c => c.kind).sort();
+  return JSON.stringify(kinds) === JSON.stringify([...TUNING.openingKinds].sort());
+})(), cards.white.hand.map(c => c.kind).join(','));
+check('the opening hand came out of the deck rather than being conjured',
+  cards.white.deck.length === DECK - HAND, String(cards.white.deck.length));
 check('the two decks are separate objects', cards.white.deck !== cards.black.deck);
 check('no card id is shared across the two decks', (() => {
   const w = new Set([...cards.white.hand, ...cards.white.deck].map(c => c.id));
@@ -154,17 +161,22 @@ check('a named card that does not cover the piece is refused', (() => {
 log('\n=== 6. Drawing, the cap, and the tempo bonus ===');
 const drawer = createCards().white;
 drawer.hand = [];
-check('drawing to the target fills the hand',
-  drawUpTo(drawer, HAND) === HAND && drawer.hand.length === HAND);
-check('drawing again when already at target takes none', drawUpTo(drawer, HAND) === 0);
-check('a capture draws one more',
-  drawBonus(drawer) === 1 && drawer.hand.length === HAND + 1);
-drawUpTo(drawer, TUNING.handMax);
+check('a turn deals a fixed number, not a refill',
+  drawCards(drawer, TUNING.drawPerTurn) === TUNING.drawPerTurn
+  && drawer.hand.length === TUNING.drawPerTurn);
+check('dealing again deals again -- the hand grows',
+  drawCards(drawer, TUNING.drawPerTurn) === TUNING.drawPerTurn
+  && drawer.hand.length === TUNING.drawPerTurn * 2);
+check('a capture draws one more', (() => {
+  const before = drawer.hand.length;
+  return drawBonus(drawer) === 1 && drawer.hand.length === before + 1;
+})());
+drawCards(drawer, TUNING.handMax);
 check('the cap is seven', drawer.hand.length === 7, String(drawer.hand.length));
 check('the bonus refuses to pass the cap',
   drawBonus(drawer) === 0 && drawer.hand.length === 7);
-check('and drawing to a target above the cap stops at it',
-  drawUpTo(drawer, 9) === 0 && drawer.hand.length === 7);
+check('and a full hand simply refuses the deal -- section 10\'s card lock',
+  drawCards(drawer, 4) === 0 && drawer.hand.length === 7);
 
 log('\n=== 7. An exhausted deck reshuffles the discard ===');
 const cycler = createCards().white;
@@ -172,7 +184,7 @@ cycler.discard = cycler.deck.splice(0);   // the whole deck face up, nothing to 
 cycler.hand = [];
 check('the deck really is empty',
   cycler.deck.length === 0 && cycler.discard.length === DECK - HAND);
-const redrawn = drawUpTo(cycler, HAND);
+const redrawn = drawCards(cycler, HAND);
 check('the discard becomes the new deck', redrawn === HAND && cycler.hand.length === HAND);
 check('and the discard pile is now empty', cycler.discard.length === 0);
 check('no card was lost in the shuffle',
@@ -180,23 +192,34 @@ check('no card was lost in the shuffle',
   String(cycler.deck.length + cycler.hand.length));
 
 log('\n=== 8. Soft enrage, at twenty plies ===');
-check('the base target before twenty plies',
-  drawTargetFor(19) === TUNING.drawTarget && !isEnraged(19));
+check('the base deal before twenty plies',
+  drawPerTurnFor(19) === TUNING.drawPerTurn && !isEnraged(19));
 check('one more from the twentieth',
-  drawTargetFor(20) === TUNING.enrageDrawTarget && isEnraged(20)
-  && TUNING.enrageDrawTarget === TUNING.drawTarget + 1);
-check('and it stays there', drawTargetFor(64) === TUNING.enrageDrawTarget);
+  drawPerTurnFor(20) === TUNING.enrageDrawPerTurn && isEnraged(20)
+  && TUNING.enrageDrawPerTurn === TUNING.drawPerTurn + 1);
+check('and it stays there', drawPerTurnFor(64) === TUNING.enrageDrawPerTurn);
 
 log('\n=== 9. Mulligan, once a game ===');
 const mull = createCards().black;
 const before = mull.hand.map(c => c.id).join(',');
-check('the first mulligan is granted', mulligan(mull, HAND) === true);
-check('it deals a fresh hand', mull.hand.length === HAND);
+check('the first mulligan is granted', mulligan(mull) === true);
+check('it deals a fresh opening hand', mull.hand.length === HAND);
+check('one card per kind again, not another random draw', (() => {
+  const kinds = mull.hand.map(c => c.kind).sort();
+  return JSON.stringify(kinds) === JSON.stringify([...TUNING.openingKinds].sort());
+})(), mull.hand.map(c => c.kind).join(','));
 check('the old hand went to the discard', mull.discard.length === HAND);
 check('the hand actually changed', mull.hand.map(c => c.id).join(',') !== before);
-check('the second is refused', mulligan(mull, HAND) === false);
+check('the second is refused', mulligan(mull) === false);
 check('and the refusal changes nothing',
   mull.hand.length === HAND && mull.discard.length === HAND);
+check('a mulligan on a hand grown past the opening gives back the opening size', (() => {
+  const grown = createCards().white;
+  drawCards(grown, TUNING.handMax);
+  const was = grown.hand.length;
+  mulligan(grown);
+  return was === TUNING.handMax && grown.hand.length === HAND;
+})());
 
 log('\n=== 10. Nothing private leaks into the public view ===');
 const pub = cardsPublic(cards, 0);
@@ -205,10 +228,11 @@ check('the public view names no card', !blob.includes('"id"') && !blob.includes(
 check('it does carry the counts',
   pub.white.handCount === HAND && pub.white.deckCount === DECK - HAND
   && pub.white.discardCount === 0);
-check('and the current draw target',
-  pub.drawTarget === TUNING.drawTarget && pub.enraged === false);
+check('and the current deal, the cap and the sacrifice price',
+  pub.drawPerTurn === TUNING.drawPerTurn && pub.handMax === TUNING.handMax
+  && pub.sacrificeCost === TUNING.sacrificeCost && pub.enraged === false);
 check('the enraged view reports one more',
-  cardsPublic(cards, 22).drawTarget === TUNING.enrageDrawTarget);
+  cardsPublic(cards, 22).drawPerTurn === TUNING.enrageDrawPerTurn);
 
 const view = handView(bareSide('pawn', 'rook'), opening, true);
 check('your own hand marks the live card and the dead one',
@@ -298,6 +322,83 @@ const snapped = createCards();
 snapped.white.lastReplaced = ['knight'];
 check('the snapshot carries the replacement record',
   snapshotCards(snapped).white.lastReplaced[0] === 'knight');
+
+log('\n=== 13. Cycling past a hand that cannot move anything ===');
+// The draw protection of section 7: a hand of dead cards is dealt past, one at a time,
+// until something can move. Free, but it costs the deck -- the cards come back around.
+{
+  const stuck = stockedSide(['rook', 'rook', 'rook'], ['queen', 'pawn', 'knight']);
+  const cycled = cycleForPlayable(stuck, opening);
+  check('a dead hand is cycled', cycled.length > 0, JSON.stringify(cycled));
+  check('only as far as it has to be', cycled.length === 1, String(cycled.length));
+  check('and the hand can now move something',
+    stuck.hand.some(c => cardPlayable(c, movableTypes(opening))));
+  check('the cycled cards went to the discard',
+    stuck.discard.length === cycled.length && stuck.hand.length === 3);
+
+  const fine = stockedSide(['pawn', 'rook'], ['queen']);
+  check('a hand that can already move is left alone',
+    cycleForPlayable(fine, opening).length === 0 && fine.deck.length === 1);
+
+  // A player down to a bare king has no live card anywhere, and must not churn the deck
+  // looking for one that does not exist.
+  const bare = new Chess('4k3/8/8/8/8/8/8/4K2R w K - 0 1');
+  const noRook = stockedSide(['knight', 'knight'], ['bishop', 'queen']);
+  check('with nothing live anywhere, nothing is cycled',
+    cycleForPlayable(noRook, bare).length === 0 && noRook.discard.length === 0);
+}
+
+log('\n=== 14. The sacrifice: three cards for any move, on a cooldown ===');
+{
+  const rich = bareSide('pawn', 'knight', 'bishop', 'rook');
+  check('a full hand off cooldown can sacrifice', canSacrifice(rich, 0) === true);
+  check('and reports no wait', sacrificeReadyIn(rich, 0) === 0);
+
+  const thin = bareSide('pawn', 'knight');
+  check('a hand short of the cost cannot',
+    canSacrifice(thin, 0) === false && TUNING.sacrificeCost === 3);
+
+  const ids = rich.hand.slice(0, 3).map(c => c.id);
+  check('naming exactly the cost is accepted',
+    resolveSacrifice(rich, ids, 4)?.kind === 'sacrifice');
+  check('naming too few is refused', resolveSacrifice(rich, ids.slice(0, 2), 4) === null);
+  check('naming the same card twice is refused',
+    resolveSacrifice(rich, [ids[0], ids[0], ids[1]], 4) === null);
+  check('naming a card that is not in hand is refused',
+    resolveSacrifice(rich, [ids[0], ids[1], 999999], 4) === null);
+  check('a non-array is refused', resolveSacrifice(rich, 'three', 4) === null);
+
+  const spend = resolveSacrifice(rich, ids, 4);
+  commitSpend(rich, spend);
+  check('paying takes all three out of the hand',
+    rich.hand.length === 1 && rich.discard.length === 3);
+  check('and they are on the public record',
+    rich.played.length === 3 && rich.sacrificesUsed === 1);
+  check('the cooldown starts at the ply it was paid',
+    sacrificeReadyIn(rich, 4) === TUNING.sacrificeCooldownPlies);
+  check('and counts down with the game',
+    sacrificeReadyIn(rich, 4 + TUNING.sacrificeCooldownPlies - 1) === 1
+    && sacrificeReadyIn(rich, 4 + TUNING.sacrificeCooldownPlies) === 0);
+  check('a second sacrifice inside the cooldown is refused', (() => {
+    const again = bareSide('pawn', 'knight', 'bishop');
+    again.lastSacrificePly = 4;
+    return resolveSacrifice(again, again.hand.map(c => c.id), 5) === null;
+  })());
+  check('and granted once it has passed', (() => {
+    const again = bareSide('pawn', 'knight', 'bishop');
+    again.lastSacrificePly = 4;
+    return resolveSacrifice(again, again.hand.map(c => c.id),
+      4 + TUNING.sacrificeCooldownPlies) !== null;
+  })());
+  check('a snapshot carries the cooldown, so a takeback cannot refresh it', (() => {
+    const st = createCards();
+    st.white.lastSacrificePly = 7;
+    st.white.sacrificesUsed = 1;
+    const snap = snapshotCards(st);
+    st.white.lastSacrificePly = null;
+    return snap.white.lastSacrificePly === 7 && snap.white.sacrificesUsed === 1;
+  })());
+}
 
 log(`\n${failures === 0 ? 'ALL CARD CHECKS PASSED' : `${failures} CARD CHECK(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

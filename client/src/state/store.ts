@@ -1,4 +1,10 @@
-import type { RoomState, You, ChatMessage, MarkView, HandState } from '../types';
+import { Chess } from 'chess.js';
+import type {
+  RoomState, You, ChatMessage, MarkView, HandState, HistoryEntry, GameSummary,
+} from '../types';
+
+/** The position every game starts from, and what ply 0 shows in review. */
+export const START_FEN = new Chess().fen();
 
 export type Orientation = 'white' | 'black';
 
@@ -16,10 +22,21 @@ export interface AppState {
   chat: ChatMessage[];
   /** Squares your own team has flagged for the current position. */
   marks: MarkView[];
+  /** The finished game's archive entry, once the server has written it. */
+  archived: GameSummary | null;
   /** Cards mode: your own hand. Null in team mode, or if you hold no seat. */
   hand: HandState | null;
   /** The card you have picked to pay for your next move; null lets the server choose. */
   selectedCardId: number | null;
+  /**
+   * Which ply the board is showing, or null for the live position.
+   *
+   * 0 is the starting position, 1 is after White's first move, and so on. Review is
+   * strictly a client-side lens: the server is never told, nothing about the game pauses,
+   * and the clock keeps running -- so stepping back to check what happened four moves ago
+   * cannot cost a player the position they were about to play.
+   */
+  reviewPly: number | null;
 }
 
 type Listener = (s: AppState, prev: AppState) => void;
@@ -34,8 +51,10 @@ const state: AppState = {
   error: null,
   chat: [],
   marks: [],
+  archived: null,
   hand: null,
   selectedCardId: null,
+  reviewPly: null,
 };
 
 const listeners = new Set<Listener>();
@@ -55,6 +74,69 @@ export function subscribe(l: Listener): () => void {
   return () => { listeners.delete(l); };
 }
 
+// ---- review ----
+
+/**
+ * The position on the board right now: the reviewed ply if one is being read, else live.
+ *
+ * The FEN comes from the history entry rather than being replayed, because the server
+ * records one per ply. That is what makes review free at this end -- no move generator, no
+ * loop from the start, and no chance of the two ends disagreeing about what a position was.
+ */
+export function shownPosition(s: AppState = state): {
+  fen: string;
+  lastMove: { from: string; to: string } | null;
+  inCheck: boolean;
+  live: boolean;
+} {
+  const room = s.room;
+  if (!room) {
+    return { fen: START_FEN, lastMove: null, inCheck: false, live: true };
+  }
+  const ply = s.reviewPly;
+  if (ply == null || ply >= room.history.length) {
+    return {
+      fen: room.fen, lastMove: room.lastMove, inCheck: room.inCheck, live: true,
+    };
+  }
+  if (ply <= 0) {
+    return { fen: START_FEN, lastMove: null, inCheck: false, live: false };
+  }
+  const entry = room.history[ply - 1];
+  return {
+    fen: entry.fen,
+    lastMove: { from: entry.from, to: entry.to },
+    // A check flag is not recorded per ply, and the FEN alone does not carry one -- but
+    // the SAN does, and it is what a move list already shows.
+    inCheck: /[+#]$/.test(entry.san),
+    live: false,
+  };
+}
+
+/** True when the board is showing an earlier position rather than the live one. */
+export function isReviewing(s: AppState = state): boolean {
+  return !shownPosition(s).live;
+}
+
+/** Step review to a ply, clamped; anything at or past the end drops back to live. */
+export function setReviewPly(ply: number | null): void {
+  const room = state.room;
+  if (ply == null || !room) { setState({ reviewPly: null }); return; }
+  const clamped = Math.max(0, Math.min(room.history.length, Math.round(ply)));
+  setState({ reviewPly: clamped >= room.history.length ? null : clamped });
+}
+
+/** The ply review is sitting on, resolved against the live end of the game. */
+export function reviewAt(s: AppState = state): number {
+  return s.reviewPly ?? (s.room?.history.length ?? 0);
+}
+
+/** The entry review is sitting on, for anything that needs to describe it. */
+export function reviewEntry(s: AppState = state): HistoryEntry | null {
+  const at = reviewAt(s);
+  return at > 0 ? (s.room?.history[at - 1] ?? null) : null;
+}
+
 // ---- derived helpers ----
 
 /** Which way up the board should sit: your team if seated, else White. */
@@ -63,12 +145,24 @@ export function orientation(s: AppState = state): Orientation {
   return s.you?.seat?.color ?? 'white';
 }
 
-/** True when it is this browser's turn to move. */
+/**
+ * True when it is this browser's turn to move.
+ *
+ * Reviewing an earlier position does not stop being your turn -- the clock says so -- but
+ * it does stop you moving, because the pieces on screen are not where they are. The board
+ * is disabled through `canMoveNow` rather than here, so everything else that asks "is it
+ * my turn" (the alert, the chime, the card hand) still gets the honest answer.
+ */
 export function isMyTurn(s: AppState = state): boolean {
   const { room, you } = s;
   if (!room || !you?.seat || room.status !== 'playing') return false;
   if (room.pendingTakeback) return false;
   return room.activeColor === you.seat.color && room.activeSeatId === you.seat.seatId;
+}
+
+/** True when this browser may actually drag a piece: its turn, and looking at it. */
+export function canMoveNow(s: AppState = state): boolean {
+  return isMyTurn(s) && !isReviewing(s);
 }
 
 /** True when this browser holds a seat, and so may chat to a team and mark squares. */

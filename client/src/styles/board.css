@@ -313,3 +313,38 @@
   25%      { transform: translateX(-3px); }
   75%      { transform: translateX(3px); }
 }
+
+
+/* ---- reviewing an earlier position ------------------------------------------
+   The board is showing a position that is not the one being played, which is worth saying
+   loudly: a muted board and a standing frame, so a glance is enough to know that the game
+   has moved on without you. Deliberately not a dimming overlay -- the pieces still have to
+   be readable, since reading them is the entire reason to be here. */
+
+.board-reviewing .board-frame {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 0 8px #14120F,
+    0 0 0 9px rgba(232, 176, 75, 0.28),
+    0 0 34px rgba(232, 176, 75, 0.18),
+    0 28px 70px rgba(0, 0, 0, 0.7);
+}
+.board-reviewing .board-squares { filter: saturate(0.5) brightness(0.94); }
+
+.board-reviewing .board-frame::after {
+  content: 'reviewing';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 3px 14px;
+  border-radius: 0 0 8px 8px;
+  background: var(--accent);
+  color: #1A1408;
+  font-size: calc(9.5px * var(--ui));
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  pointer-events: none;
+}

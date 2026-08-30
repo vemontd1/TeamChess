@@ -1,9 +1,9 @@
 import { Chess } from 'chess.js';
 import { pickMove, pieceValue, type MoveStyle } from './bots.js';
 import {
-  createCards, cardsPublic, drawTargetFor, drawUpTo, drawBonus, refreshEmergency,
-  resolveSpend, commitSpend, snapshotCards, movableTypes, cardCovers, FREE_PIECE,
-  extinctTypes, replaceExtinct, mulligan as mulliganCards,
+  createCards, cardsPublic, drawPerTurnFor, drawCards, drawBonus, refreshEmergency,
+  resolveSpend, resolveSacrifice, commitSpend, snapshotCards, movableTypes, cardCovers,
+  FREE_PIECE, extinctTypes, replaceExtinct, cycleForPlayable, mulligan as mulliganCards,
   type CardsState, type Spend,
 } from './cards.js';
 import type {
@@ -62,6 +62,10 @@ export interface Room {
   history: HistoryEntry[];
   frames: PlyFrame[];
   gameOver: GameOver | null;
+  /** The position the current game began from -- the archive records where it started. */
+  startFen: string;
+  /** Set once this game has been written to the archive, so it is never written twice. */
+  archived: boolean;
   cards: CardsState | null;         // cards mode only
   chat: ChatMessage[];              // every channel; filtered when delivered
   chatSeq: number;
@@ -152,6 +156,8 @@ export function createRoom(config: RoomConfig): Room {
     history: [],
     frames: [],
     gameOver: null,
+    startFen: new Chess().fen(),
+    archived: false,
     cards: null,
     chat: [],
     chatSeq: 0,
@@ -254,7 +260,17 @@ export function applyMove(room: Room, m: MovePayload,
   if (room.cards) {
     const peek = peekMove(room.chess, m);
     if (!peek) return FAIL;
-    spend = resolveSpend(room.cards[mover], peek.piece, m.cardId);
+    // A named sacrifice is tried first and never falls back: a player who offered three
+    // cards and got them refused must be told so, not quietly charged one card instead
+    // for a move that happened to be affordable anyway.
+    //
+    // The king is the exception, and has to be: he moves for free, so a sacrifice aimed
+    // at him buys nothing and would burn three cards for it. Dropping the sacrifice
+    // rather than refusing the move is the kinder of the two -- the move was legal and
+    // free all along, and the cards simply stay in the hand.
+    spend = m.sacrificeIds != null && peek.piece !== FREE_PIECE
+      ? resolveSacrifice(room.cards[mover], m.sacrificeIds, room.history.length)
+      : resolveSpend(room.cards[mover], peek.piece, m.cardId);
     if (!spend) return FAIL;
   }
 
@@ -278,6 +294,9 @@ export function applyMove(room: Room, m: MovePayload,
     playerName: seat?.name ?? (seat?.kind === 'bot' ? 'Bot' : 'Empty seat'),
     auto,
     bot: byBot && !auto,
+    fen: room.chess.fen(),
+    from: res.from,
+    to: res.to,
   };
 
   room.frames.push({
@@ -414,22 +433,37 @@ export function armTurn(room: Room, hooks: TurnHooks, ms?: number): void {
 }
 
 /**
- * Open the turn for whoever is on move in cards mode: draw back up to the current target,
- * then work out whether any card in the refreshed hand can move anything.
+ * Open the turn for whoever is on move in cards mode: deal this turn's cards, then work
+ * out whether any card in the refreshed hand can move anything.
  *
- * Drawing "up to" a target rather than "one per turn" is what makes this safe to call
- * from every path that re-arms a turn -- a declined takeback, a seat becoming a bot --
- * because a hand already at the target draws nothing.
+ * Guarded against being opened twice. Every path that re-arms a turn calls through here --
+ * a declined takeback, a seat becoming a bot mid-turn -- and a fixed deal would hand out
+ * two more cards on each of them. `openedPly` is what makes the second call a no-op, and
+ * it rides on the cards so a takeback restores it with the hands.
  */
 export function beginCardTurn(room: Room): void {
   if (!room.cards || room.status !== 'playing') return;
+  if (room.cards.openedPly === room.history.length) return;
+  room.cards.openedPly = room.history.length;
   const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
   const side = room.cards[turn];
 
-  // Fill first, then prune: a card drawn to fill the hand is as subject to the piece
-  // being gone as one that was already there, and pruning afterwards catches both.
-  drawUpTo(side, drawTargetFor(room.history.length));
+  // Deal first, then prune: a card dealt this turn is as subject to the piece being gone
+  // as one that was already there, and pruning afterwards catches both.
+  //
+  // The first turn is the exception: the opening hand was the deal for it. Dealing again
+  // here would put both players on a full seven before either had moved, and the opening
+  // spread -- one card for each piece kind -- would never actually be a hand anyone saw.
+  side.openedTurns++;
+  if (side.openedTurns > 1) drawCards(side, drawPerTurnFor(room.history.length));
   side.lastReplaced = replaceExtinct(side, extinctTypes(room.chess, turn));
+
+  // A dead hand with the king safe is a draw problem, and gets a draw answer: cycle until
+  // something can move. Under check it is not -- the position is asking a question that
+  // has to be answered this turn, and cycling might spend the whole deck without finding
+  // a card that answers it -- so the emergency move stays for exactly that case.
+  side.lastCycled = room.chess.inCheck() ? [] : cycleForPlayable(side, room.chess);
+
   refreshEmergency(side, room.chess);
 }
 
@@ -439,7 +473,7 @@ export function useMulligan(room: Room, color: Color): boolean {
   const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
   if (turn !== color) return false;
   const side = room.cards[color];
-  if (!mulliganCards(side, drawTargetFor(room.history.length))) return false;
+  if (!mulliganCards(side)) return false;
   refreshEmergency(side, room.chess);
   return true;
 }
@@ -613,6 +647,8 @@ export function resetGame(room: Room, status: 'lobby' | 'playing'): void {
   clearTakeback(room);
   clearDraw(room);
   room.chess = new Chess();
+  room.startFen = room.chess.fen();
+  room.archived = false;
   room.status = status;
   room.gameOver = null;
   room.lastMove = null;

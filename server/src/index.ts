@@ -12,11 +12,13 @@ import {
   pushChat, toggleMark, clearMarksFor, marksFor, clearDraw, useMulligan,
   type Room, type TurnHooks,
 } from './room.js';
-import { handView, drawTargetFor } from './cards.js';
+import { handView, canSacrifice, sacrificeReadyIn, TUNING } from './cards.js';
+import { initArchive, saveGame, listGames, loadGame, toPgn } from './archive.js';
+import { initProfiles, touchProfile, recordGame, profileView, myProfile } from './profiles.js';
 import type {
   Color, CreatePayload, JoinPayload, SeatTakePayload, SeatBotPayload,
   MovePayload, TakebackRespondPayload, DrawRespondPayload, JoinResult, You,
-  ChatSendPayload, MarkTogglePayload,
+  ChatSendPayload, MarkTogglePayload, GameResult, GameSummary, ProfileView,
 } from './types.js';
 
 const TAKEBACK_WINDOW_MS = 20_000;
@@ -31,7 +33,76 @@ const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: '*' } });
 
+/** Occupied seats' names, in seat order -- who actually played for a side. */
+function rosterOf(room: Room, color: Color): string[] {
+  return teamFor(room, color).seats
+    .filter(seat => seat.token != null || seat.kind === 'bot')
+    .map(seat => seat.name ?? (seat.kind === 'bot' ? 'Bot' : 'Player'));
+}
+
+/**
+ * Write a finished game out, once, and credit it to everyone who played it.
+ *
+ * Called from `broadcast`, which every path that can end a game already goes through --
+ * a mate, a resignation, an agreed draw, a clock running out into a mate. Hanging it off
+ * the one funnel rather than off five call sites is what stops the sixth ending, whenever
+ * it is added, from quietly going unrecorded. The `archived` flag makes every call after
+ * the first a no-op, so the cost of putting it here is one boolean test per broadcast.
+ *
+ * A failed archive returns null and is not fatal: a game that could not be written is
+ * still a game that was played, and taking the room down over it would be the worse bug.
+ */
+function archiveIfFinished(room: Room): void {
+  if (room.archived || room.status !== 'finished') return;
+  room.archived = true;
+
+  const winner = room.gameOver?.winner;
+  const result: GameResult = winner === 'white' || winner === 'black' ? winner
+    : winner === 'draw' ? 'draw' : 'unfinished';
+  finishGame(room, result, room.gameOver?.reason ?? 'unknown');
+}
+
+/** An abandoned game: everyone left mid-play, so it is kept but scores nothing. */
+function archiveUnfinished(room: Room): void {
+  if (room.archived || room.status !== 'playing') return;
+  room.archived = true;
+  finishGame(room, 'unfinished', 'abandoned');
+}
+
+function finishGame(room: Room, result: GameResult, reason: string): void {
+  const summary = saveGame({
+    roomId: room.id,
+    config: room.config,
+    white: rosterOf(room, 'white'),
+    black: rosterOf(room, 'black'),
+    history: room.history,
+    startFen: room.startFen,
+    finalFen: room.chess.fen(),
+    result,
+    reason,
+  });
+  if (!summary) return;
+
+  creditPlayers(room, summary);
+  io.to(room.id).emit('game:archived', summary);
+}
+
+/** Put the game on the record of every human who held a seat in it. Bots have no record. */
+function creditPlayers(room: Room, summary: GameSummary): void {
+  for (const color of ['white', 'black'] as Color[]) {
+    for (const seat of teamFor(room, color).seats) {
+      if (!seat.token) continue;
+      try {
+        recordGame(seat.token, seat.name ?? 'Player', summary, color);
+      } catch (err) {
+        console.warn('[profiles] could not record a game:', (err as Error).message);
+      }
+    }
+  }
+}
+
 function broadcast(room: Room): void {
+  archiveIfFinished(room);
   io.to(room.id).emit('room:state', serialize(room));
   void pushMarks(room);
   void pushHands(room);
@@ -75,6 +146,7 @@ async function pushHands(room: Room): Promise<void> {
     const side = room.cards![found.color];
     const yourTurn = room.status === 'playing' && turn === found.color
       && !room.pendingTakeback;
+    const plies = room.history.length;
     s.emit('cards:hand', {
       color: found.color,
       cards: handView(side, room.chess, yourTurn),
@@ -82,6 +154,10 @@ async function pushHands(room: Room): Promise<void> {
       mulliganAvailable: yourTurn && !side.mulliganUsed,
       yourTurn,
       replaced: yourTurn ? side.lastReplaced : [],
+      cycled: yourTurn ? side.lastCycled : [],
+      sacrificeCost: TUNING.sacrificeCost,
+      sacrificeAvailable: yourTurn && canSacrifice(side, plies),
+      sacrificeReadyIn: sacrificeReadyIn(side, plies),
     });
   });
 }
@@ -169,6 +245,10 @@ io.on('connection', (socket: Socket) => {
     socket.join(room.id);
 
     if (!room.hostToken) room.hostToken = token;
+
+    // A join is the only moment this server reliably learns a player's chosen name, so it
+    // is where the profile is created or its name brought up to date.
+    try { touchProfile(token, name); } catch { /* a profile is never worth a failed join */ }
 
     // reconnect: reclaim a seat this token already holds
     const existing = seatByToken(room, token);
@@ -307,6 +387,21 @@ io.on('connection', (socket: Socket) => {
     if (room.status === 'playing') armTurn(room, hooks); else clearTimer(room);
     cb?.(true);
     broadcast(room);
+  });
+
+  /**
+   * The caller's own profile and game list.
+   *
+   * The token is taken from the payload as well as the socket, because the home screen
+   * asks for this before it has joined anything. It is the caller's own secret either
+   * way; what comes back is only ever the profile that token derives.
+   */
+  socket.on('profile:me', (payload: { token?: string; limit?: number } | undefined,
+                           cb?: (res: ProfileView | null) => void) => {
+    const token = data.token ?? payload?.token;
+    if (!token || typeof token !== 'string') { cb?.(null); return; }
+    const limit = Number(payload?.limit);
+    cb?.(myProfile(token, Number.isFinite(limit) ? limit : 25));
   });
 
   // ---- team coordination: chat and marks, both team-scoped ----
@@ -488,6 +583,10 @@ io.on('connection', (socket: Socket) => {
     // drop rooms nobody is left in
     if (room.spectators.size === 0 &&
         occupiedCount(room.white) === 0 && occupiedCount(room.black) === 0) {
+      // last one out: the room object is about to go, so anything worth keeping has to be
+      // copied out now -- a game abandoned in progress is still reviewable
+      archiveIfFinished(room);
+      archiveUnfinished(room);
       clearTimer(room);
       clearTakeback(room);
       clearDraw(room);
@@ -540,6 +639,37 @@ function resolveTakeback(room: Room, accept: boolean): void {
   broadcast(room);
 }
 
+// ---------- the archive over HTTP ----------
+//
+// Read-only and unauthenticated, which is what a finished game is: the position, the
+// moves and the names were already on both players' screens. Nothing here reads a hand,
+// a token or a live room.
+
+app.get('/api/games', (req, res) => {
+  const limit = Number(req.query.limit);
+  res.json(listGames(Number.isFinite(limit) ? limit : 40));
+});
+
+app.get('/api/games/:id', (req, res) => {
+  const game = loadGame(req.params.id);
+  if (!game) { res.status(404).json({ error: 'No such game' }); return; }
+  res.json(game);
+});
+
+/** The same game as PGN, so it can be opened in anything that reads chess. */
+app.get('/api/games/:id/pgn', (req, res) => {
+  const game = loadGame(req.params.id);
+  if (!game) { res.status(404).type('text/plain').send('No such game'); return; }
+  res.type('text/plain').send(toPgn(game));
+});
+
+app.get('/api/profile/:id', (req, res) => {
+  const limit = Number(req.query.limit);
+  const view = profileView(req.params.id, Number.isFinite(limit) ? limit : 25);
+  if (!view) { res.status(404).json({ error: 'No such profile' }); return; }
+  res.json(view);
+});
+
 // ---------- static client (production) ----------
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(__dirname, '../../client/dist');
@@ -550,6 +680,9 @@ if (fs.existsSync(clientDist)) {
   app.get('/', (_req, res) =>
     res.send('Bolotnoye Logovo server running. Start the Vite client on :5173 in dev.'));
 }
+
+initArchive();
+initProfiles();
 
 const PORT = Number(process.env.PORT) || 3001;
 httpServer.listen(PORT, () => {

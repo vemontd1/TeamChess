@@ -13,6 +13,7 @@ import * as net from '../net/socket';
 import {
   getState, setState, subscribe, orientation, isMyTurn, mustAnswerTakeback,
   canRequestTakeback, canOfferDraw, canEndGame, mustAnswerDraw, isSeated, isCardsMode,
+  shownPosition, isReviewing, setReviewPly, reviewAt, canMoveNow,
   type AppState,
 } from '../state/store';
 import type { Color, RoomState, MoveFx, ChatChannel, HistoryEntry } from '../types';
@@ -117,19 +118,30 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
   const board = new Board(boardHost, {
     onMove: async (from, to, promotion) => {
-      // An explicit pick is honoured; with none, the server spends the cheapest card that
-      // covers the piece, which is always the one the player would have chosen.
-      const cardId = cardHand.selection() ?? undefined;
-      const ok = await net.sendMove({ from, to, promotion, cardId });
+      // A sacrifice, once paid for, is what the move is made with -- it beats any card
+      // pick, because it is a bigger and more deliberate payment than one.
+      // Otherwise: an explicit pick is honoured, and with none the server spends the
+      // cheapest card that covers the piece, which is what the player would have chosen.
+      const sacrificeIds = cardHand.sacrificeSelection() ?? undefined;
+      const cardId = sacrificeIds ? undefined : (cardHand.selection() ?? undefined);
+      const ok = await net.sendMove({ from, to, promotion, cardId, sacrificeIds });
       if (ok) cardHand.clearSelection();
+      else if (sacrificeIds) toast('That sacrifice was refused', 'danger');
       return ok;
     },
     onIllegal: () => sfx.illegal(),
     onPickup: () => sfx.pickup(),
     requestPromotion: promotionDialog,
     onMark: square => {
-      if (!isSeated(getState())) {
+      const s = getState();
+      if (!isSeated(s)) {
         toast('Only a seated player can mark squares');
+        return;
+      }
+      // A mark points at the live position, and lives exactly one ply. Placed from a
+      // reviewed board it would land on a square nobody else is looking at.
+      if (isReviewing(s)) {
+        toast('Marks belong to the live position — press Escape to come back');
         return;
       }
       net.toggleMark(square);
@@ -146,6 +158,9 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   const applyReach = (): void => {
     const s = getState();
     if (!isCardsMode(s) || !isMyTurn(s)) { board.setAllowedTypes(null); return; }
+    // While a sacrifice is being built the hand's own reach is beside the point: what the
+    // board should show is what the sacrifice buys, and nothing until it is paid for.
+    if (cardHand.sacrificeArmed()) { board.setAllowedTypes(cardHand.reach()); return; }
     if (hoverCardId != null) {
       const card = s.hand?.cards.find(c => c.id === hoverCardId);
       board.setAllowedTypes(hoverCardId === EMERGENCY_CARD_ID
@@ -161,6 +176,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   const cardHand = new CardHand({
     onSelect: () => { applyReach(); sfx.click(); },
     onHover: id => { hoverCardId = id; applyReach(); },
+    onSacrificeChange: () => { applyReach(); sfx.click(); },
     onMulligan: () => { unlockAudio(); net.mulligan(); },
     // one cue for the batch: five cards dealing in should sound like a deal, not five
     onDeal: () => { if (getState().soundOn) sfx.cardPlay(); },
@@ -189,7 +205,19 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   // The move list is the panel that takes the slack in the right column; the chat log
   // does the same on the left. Both scroll, so growing them is free usefulness rather
   // than stretched whitespace.
-  const movesPanel = panel('Move history', '<div class="moves" id="moves"></div>');
+  // The move list is also the way back through the game, so the controls for that sit in
+  // its own header rather than under the board -- the buttons and the plies they step
+  // through belong together, and the board column has no room to spare.
+  const movesPanel = panel('Move history', `
+    <div class="review-bar" id="reviewbar">
+      <button class="btn btn-sm btn-icon btn-ghost" id="rvfirst" title="First move (Home)">⏮</button>
+      <button class="btn btn-sm btn-icon btn-ghost" id="rvprev" title="Previous move (←)">◀</button>
+      <button class="btn btn-sm btn-icon btn-ghost" id="rvnext" title="Next move (→)">▶</button>
+      <button class="btn btn-sm btn-icon btn-ghost" id="rvlast" title="Latest move (End)">⏭</button>
+      <span class="review-at" id="rvat"></span>
+      <button class="btn btn-sm" id="rvlive" title="Back to the live position (Esc)">Live</button>
+    </div>
+    <div class="moves" id="moves"></div>`);
   movesPanel.classList.add('panel-grow');
   const statsPanel = panel('Player stats', '<div class="panel-body" id="stats"></div>');
   const timerPanel = document.createElement('section');
@@ -232,6 +260,8 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   net.onGameStart(() => {
     gameOverShown = false;
     myTurnAnnounced = false;
+    // a new game is not the old one's archive, and it is not being reviewed either
+    setState({ archived: null, reviewPly: null });
     if (getState().soundOn) sfx.start();
   });
 
@@ -246,6 +276,9 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   });
 
   net.onHand(hand => setState({ hand }));
+
+  // The game reached the archive: remember its id so the result card can offer the PGN.
+  net.onArchived(g => setState({ archived: g }));
 
   net.onMulliganed(e => {
     const s = getState();
@@ -309,12 +342,16 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     conn.classList.toggle('off', !s.connected);
     conn.querySelector('.conn-text')!.textContent = s.connected ? 'Connected' : 'Reconnecting…';
 
-    // board
+    // board -- the position on show, which is the live one unless a ply is being reviewed
+    const shown = shownPosition(s);
     board.setOrientation(orientation(s));
-    board.setPosition(room.fen, room.lastMove, room.inCheck);
-    board.setInteractive(isMyTurn(s), s.you?.seat ? (s.you.seat.color === 'white' ? 'w' : 'b') : null);
+    board.setPosition(shown.fen, shown.lastMove, shown.inCheck);
+    board.setInteractive(canMoveNow(s),
+      s.you?.seat ? (s.you.seat.color === 'white' ? 'w' : 'b') : null);
+    boardHost.classList.toggle('board-reviewing', !shown.live);
 
-    board.setMarks(s.marks);
+    // marks describe the live position, so they come off a reviewed one
+    board.setMarks(shown.live ? s.marks : []);
 
     // Cards mode narrows the board to what the hand can pay for; the team game never
     // restricts it, so the two share one board and one code path.
@@ -334,8 +371,12 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       board.setAllowedTypes(null);
     }
 
-    renderTray(trayEl, room.fen);
-    renderMoves(root.querySelector<HTMLElement>('#moves')!, room.history);
+    renderTray(trayEl, shown.fen);
+    renderMoves(root.querySelector<HTMLElement>('#moves')!, room.history, {
+      at: reviewAt(s),
+      onPick: ply => { setReviewPly(ply); sfx.click(); },
+    });
+    renderReviewBar(s);
     renderStats(root.querySelector<HTMLElement>('#stats')!, room);
 
     const isHost = s.you?.isHost === true;
@@ -419,12 +460,49 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
     if (room.status === 'finished' && !gameOverShown) {
       gameOverShown = true;
-      showGameOver(room, isHost);
+      showGameOver(room, isHost, s.archived?.id ?? null);
       announce(gameOverLine(room));
       if (s.soundOn) playEndgame(room, s.you?.seat?.color ?? null);
     }
     if (room.status !== lastStatus) { lastStatus = room.status; }
   }
+
+  const reviewBar = root.querySelector<HTMLElement>('#reviewbar')!;
+  const reviewAtEl = root.querySelector<HTMLElement>('#rvat')!;
+
+  function renderReviewBar(s: AppState): void {
+    const plies = s.room?.history.length ?? 0;
+    reviewBar.hidden = plies === 0;
+    if (plies === 0) return;
+
+    const at = reviewAt(s);
+    const live = !isReviewing(s);
+    reviewBar.classList.toggle('reviewing', !live);
+    reviewAtEl.textContent = live ? 'live'
+      : at === 0 ? 'start' : `${Math.ceil(at / 2)}${at % 2 ? '.' : '…'}`;
+
+    const dis = (id: string, off: boolean): void => {
+      const b = root.querySelector<HTMLButtonElement>(id);
+      if (b) b.disabled = off;
+    };
+    dis('#rvfirst', at === 0);
+    dis('#rvprev', at === 0);
+    dis('#rvnext', live);
+    dis('#rvlast', live);
+    dis('#rvlive', live);
+  }
+
+  const step = (to: number | null): void => {
+    setReviewPly(to);
+    sfx.click();
+  };
+  reviewBar.querySelector('#rvfirst')!.addEventListener('click', () => step(0));
+  reviewBar.querySelector('#rvprev')!.addEventListener('click',
+    () => step(reviewAt(getState()) - 1));
+  reviewBar.querySelector('#rvnext')!.addEventListener('click',
+    () => step(reviewAt(getState()) + 1));
+  reviewBar.querySelector('#rvlast')!.addEventListener('click', () => step(null));
+  reviewBar.querySelector('#rvlive')!.addEventListener('click', () => step(null));
 
   function renderControls(s: AppState, isHost: boolean): void {
     const room = s.room!;
@@ -589,7 +667,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     }
   }
 
-  function showGameOver(room: RoomState, isHost: boolean): void {
+  function showGameOver(room: RoomState, isHost: boolean, gameId: string | null): void {
     const w = room.gameOver?.winner;
     const title = w === 'draw' ? 'Draw'
       : w === 'white' ? 'White wins'
@@ -599,12 +677,17 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       <div class="go-result">${title}</div>
       <div class="go-reason">${escapeHtml(reasonLabel(room))}</div>
       <div style="margin-top:20px" id="gostats"></div>
+      ${gameId ? `<p class="go-saved">Saved to your profile — you can step back through it
+        here, or <a href="${net.pgnUrl(gameId)}" target="_blank" rel="noopener">take the
+        PGN</a>.</p>` : ''}
       <div class="btn-row" style="justify-content:center;margin-top:20px">
         ${isHost ? '<button class="btn btn-primary" id="goagain">Rematch</button>' : ''}
+        <button class="btn" id="goreview">Review the game</button>
         <button class="btn btn-ghost" id="goclose">Close</button>
       </div>`);
     renderStats(host.querySelector<HTMLElement>('#gostats')!, room);
     host.querySelector('#goclose')!.addEventListener('click', close);
+    host.querySelector('#goreview')!.addEventListener('click', () => { close(); step(0); });
     host.querySelector('#goagain')?.addEventListener('click', () => { close(); net.rematch(); });
   }
 
@@ -655,6 +738,19 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
   const onKey = (e: KeyboardEvent): void => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+
+    // The board owns the arrows while it has focus -- they drive its own square cursor --
+    // so stepping through the game is only bound outside it.
+    const inBoard = e.target instanceof Node
+      && boardHost.querySelector('.board-squares')?.contains(e.target) === true;
+    if (!inBoard) {
+      if (e.key === 'ArrowLeft') { e.preventDefault(); step(reviewAt(getState()) - 1); return; }
+      if (e.key === 'ArrowRight') { e.preventDefault(); step(reviewAt(getState()) + 1); return; }
+      if (e.key === 'Home') { e.preventDefault(); step(0); return; }
+      if (e.key === 'End') { e.preventDefault(); step(null); return; }
+    }
+    if (e.key === 'Escape' && isReviewing(getState())) { e.preventDefault(); step(null); return; }
+
     if (e.key === 'f' || e.key === 'F') flip();
     if (e.key === 'm' || e.key === 'M') toggleSound();
     if (e.key === 'e' || e.key === 'E') { paintFx(toggleMotion() !== 'off'); sfx.click(); }

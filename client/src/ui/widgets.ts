@@ -21,34 +21,71 @@ export function renderTray(el: HTMLElement, fen: string): void {
 
 // ---------- move list ----------
 
-export function renderMoves(el: HTMLElement, history: HistoryEntry[]): void {
+export interface MoveListOptions {
+  /**
+   * The ply the board is showing, so the list can mark it. `history.length` is the live
+   * position; anything less is a position being reviewed.
+   */
+  at?: number;
+  /** Clicking a ply asks for it. Omit to leave the list as a read-only record. */
+  onPick?: (ply: number) => void;
+}
+
+/**
+ * The move list, and the way back into the game's own past.
+ *
+ * Every ply is a button rather than a label, because the server records the position each
+ * one produced -- so a click is a seek, not a replay, and the list is the natural place to
+ * ask for one. The row for the ply on show is marked, and scrolled to when it moves under
+ * the reader rather than on every render, or reading an old move would be fought by the
+ * list scrolling itself back to the bottom on the opponent's next move.
+ */
+export function renderMoves(el: HTMLElement, history: HistoryEntry[],
+                            opts: MoveListOptions = {}): void {
   if (history.length === 0) {
     el.innerHTML = `<div class="empty-note">No moves yet</div>`;
     return;
   }
 
+  const at = opts.at ?? history.length;
+  const pickable = opts.onPick != null;
+
   // pair plies into numbered full moves
   const rows: string[] = [];
   for (let i = 0; i < history.length; i += 2) {
-    const w = history[i];
-    const b = history[i + 1];
-    const cell = (e: HistoryEntry | undefined): string => {
+    const cell = (e: HistoryEntry | undefined, ply: number): string => {
       if (!e) return '<span></span>';
       const mark = e.auto ? '<span class="move-auto" title="Forced by the clock">⏱</span>'
         : e.bot ? '<span class="move-bot" title="Played by a bot">◆</span>' : '';
-      return `<span><span class="move-san ${e.color === 'white' ? 'w' : 'b'}">${escapeHtml(e.san)}</span>
-        ${mark}<span class="move-by">${escapeHtml(e.playerName)}</span></span>`;
+      const inner = `<span class="move-san ${e.color === 'white' ? 'w' : 'b'}">${
+        escapeHtml(e.san)}</span>${mark}<span class="move-by">${
+        escapeHtml(e.playerName)}</span>`;
+      if (!pickable) return `<span>${inner}</span>`;
+      return `<button type="button" class="move-cell${ply === at ? ' at' : ''}"
+        data-ply="${ply}" title="Show the position after ${escapeHtml(e.san)}"
+        aria-current="${ply === at}">${inner}</button>`;
     };
     const latest = i + 2 >= history.length;
     rows.push(`<div class="move-row ${latest ? 'latest' : ''}">
       <span class="move-no">${i / 2 + 1}.</span>
       <span style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-        ${cell(w)}${cell(b)}
+        ${cell(history[i], i + 1)}${cell(history[i + 1], i + 2)}
       </span>
     </div>`);
   }
   el.innerHTML = rows.join('');
-  el.scrollTop = el.scrollHeight;
+
+  if (opts.onPick) {
+    el.querySelectorAll<HTMLButtonElement>('.move-cell').forEach(b => {
+      b.addEventListener('click', () => opts.onPick!(Number(b.dataset.ply)));
+    });
+  }
+
+  // Follow the marked ply, not the end of the list: at the live position those are the
+  // same thing, and while reviewing they very much are not.
+  const marked = el.querySelector<HTMLElement>('.move-cell.at');
+  if (marked) marked.scrollIntoView({ block: 'nearest' });
+  else el.scrollTop = el.scrollHeight;
 }
 
 // ---------- stats ----------

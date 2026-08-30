@@ -2,6 +2,7 @@ import { createRoom, getName, setName } from '../net/socket';
 import { sfx, unlockAudio } from '../audio/sfx';
 import { toast } from './widgets';
 import { Slider, Segmented, toggle } from './controls';
+import { mountProfile } from './profile';
 
 const TIMER_STOPS = [
   { value: 10, label: '10' }, { value: 15, label: '15' }, { value: 20, label: '20' },
@@ -67,6 +68,8 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
             <button class="btn btn-lg" id="join">Join</button>
           </div>
         </section>
+
+        <section class="panel edge prof-panel" id="profile" hidden></section>
       </div>
     </div>`;
 
@@ -123,11 +126,20 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
   });
   root.querySelector('#timer-slot')!.appendChild(timer.el);
 
+  // Your own record and the games on it. Fetched rather than waited for: a profile that
+  // will not load must never be the reason a room cannot be created.
+  const reloadProfile = mountProfile(root.querySelector<HTMLElement>('#profile')!);
+
   const saveName = (): string => {
     const v = nm.value.trim() || 'Player';
     setName(v);
     return v;
   };
+
+  // A rename does not reach the server until the next join, so the panel keeps showing
+  // the name the profile was last saved under until then. Reloading on blur is what makes
+  // that read as a lag rather than as the field having been ignored.
+  nm.addEventListener('blur', () => { saveName(); reloadProfile(); });
 
   root.querySelector('#create')!.addEventListener('click', async () => {
     unlockAudio();

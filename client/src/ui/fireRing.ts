@@ -15,6 +15,13 @@ import { motionLevel, onMotionChange, type MotionLevel } from '../state/motion';
  *
  * The canvas is deliberately larger than the ring and sits ABOVE the SVG: flames rise well
  * outside the stroke radius, and drawing under a 7px opaque stroke hid the hottest part.
+ *
+ * Everything below is written in *design* coordinates -- a 152-unit ring, the same units
+ * the SVG's viewBox uses -- and the display scale is applied once, as a canvas transform.
+ * The ring itself is sized in CSS as `152px * var(--ui)`, so on a large display it is drawn
+ * bigger than 152px; a canvas pinned to a fixed 244px box then covered the wrong circle
+ * entirely, which is why the fire appeared beside the timer rather than on it. Scaling by
+ * transform keeps particle sizes, glow widths and the bloom in proportion for free.
  */
 
 interface Particle {
@@ -46,12 +53,15 @@ export class FireRing {
   private parts: Particle[] = [];
   private raf = 0;
 
-  private ring: number;      // ring radius
+  private designBox: number; // the ring's size in design units -- what `scale` is against
+  private ring: number;      // ring radius, in design units
   private pad: number;       // slack around the ring so flames are not clipped
-  private box: number;       // canvas css size
+  private box: number;       // the drawing surface, in design units
   private cx: number;
   private cy: number;
   private dpr = 1;
+  /** Display size of the ring in CSS pixels, which `--ui` scales away from the design 152. */
+  private shownRing: number;
 
   private frac = 1;
   private urgency = 0;
@@ -62,15 +72,16 @@ export class FireRing {
   private t = 0;
 
   constructor(ringBox: number, ringRadius: number, pad = 46) {
+    this.designBox = ringBox;
     this.ring = ringRadius;
     this.pad = pad;
     this.box = ringBox + pad * 2;
     this.cx = this.box / 2;
     this.cy = this.box / 2;
+    this.shownRing = ringBox;
 
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'fire-canvas';
-    this.canvas.style.inset = `${-pad}px`;
     this.ctx = this.canvas.getContext('2d', { alpha: true })!;
 
     this.level = motionLevel();
@@ -87,13 +98,32 @@ export class FireRing {
     this.resize();
   }
 
+  /**
+   * Match the canvas to the ring's real on-screen size.
+   *
+   * Called from a ResizeObserver on the ring, so it tracks `--ui`, a window resize and a
+   * zoom change alike rather than trusting a constant that only happened to be right at
+   * one scale.
+   */
+  setDisplaySize(ringCssPx: number): void {
+    if (!(ringCssPx > 0) || Math.abs(ringCssPx - this.shownRing) < 0.5) return;
+    this.shownRing = ringCssPx;
+    this.resize();
+  }
+
   private resize(): void {
+    const scale = this.shownRing / this.designBox;
+    const css = this.box * scale;
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.canvas.width = this.box * this.dpr;
-    this.canvas.height = this.box * this.dpr;
-    this.canvas.style.width = `${this.box}px`;
-    this.canvas.style.height = `${this.box}px`;
-    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.canvas.width = Math.round(css * this.dpr);
+    this.canvas.height = Math.round(css * this.dpr);
+    this.canvas.style.width = `${css}px`;
+    this.canvas.style.height = `${css}px`;
+    // the pad is in design units too, so it has to shrink and grow with everything else
+    this.canvas.style.inset = `${-this.pad * scale}px`;
+    // one transform carries both the device ratio and the display scale, which leaves the
+    // whole of the drawing code below working in plain design units
+    this.ctx.setTransform(this.dpr * scale, 0, 0, this.dpr * scale, 0, 0);
   }
 
   setProgress(frac: number): void {

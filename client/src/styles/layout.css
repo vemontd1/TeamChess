@@ -528,3 +528,65 @@
   .topbar { padding: 11px 15px; gap: 11px; }
   .brand span { display: none; }
 }
+
+/* ---- the replay viewer ------------------------------------------------------
+   A finished game, board and move list side by side. Wider than an ordinary modal
+   because it is the only one that has to hold a board. */
+
+.modal-wide {
+  width: min(calc(880px * var(--ui)), calc(100vw - 32px));
+  padding: 20px;
+  text-align: left;
+}
+
+.viewer-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+.viewer-title {
+  font-family: var(--font-display);
+  font-size: calc(18px * var(--ui));
+  color: var(--text);
+}
+.viewer-vs { color: var(--text-faint); font-size: calc(12px * var(--ui)); margin: 0 4px; }
+.viewer-sub {
+  margin-top: 3px;
+  font-size: calc(11.5px * var(--ui));
+  color: var(--text-faint);
+}
+.viewer-head .btn:first-of-type { margin-left: auto; }
+
+.viewer-body {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+}
+.viewer-board { flex: 0 0 auto; }
+
+.viewer-side {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.viewer-moves { flex: 1 1 auto; min-height: calc(200px * var(--ui)); }
+.viewer-foot {
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* The board and the list stop fitting side by side well before the modal itself does. */
+@media (max-width: 900px) {
+  .viewer-body { flex-direction: column; align-items: stretch; }
+  .viewer-board { align-self: center; }
+  .viewer-moves { max-height: calc(200px * var(--ui)); }
+}

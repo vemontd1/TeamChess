@@ -8,3 +8,6 @@ dist/
 
 # source SFX pack (only client/public/sfx/ is loaded by the app)
 Assets/
+
+# archived games and player profiles, written at runtime
+data/

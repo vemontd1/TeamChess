@@ -1,7 +1,7 @@
 import { pieceSvg, type PieceCode } from '../board/pieces';
 import { escapeHtml } from './timerRing';
 import { motionLevel, onMotionChange, type MotionLevel } from '../state/motion';
-import type { CardKind, HandState, CardsPublic, Color } from '../types';
+import type { CardKind, HandState, CardsPublic, CardSidePublic, Color } from '../types';
 
 /** The card ids the server reserves. A negative id is not a card in anyone's deck. */
 export const EMERGENCY_CARD_ID = -1;
@@ -59,6 +59,8 @@ export interface CardHandHandlers {
   onHover: (cardId: number | null) => void;
   /** Cards arrived in the hand -- one cue for the batch, never one per card. */
   onDeal?: (count: number) => void;
+  /** The sacrifice was armed, disarmed, or its pile of cards changed. */
+  onSacrificeChange?: (armed: boolean) => void;
 }
 
 interface Slot { id: number; kind: CardKind; playable: boolean; emergency: boolean }
@@ -104,6 +106,14 @@ export class CardHand {
   private noteEl: HTMLElement;
   private handlers: CardHandHandlers;
   private selectedId: number | null = null;
+  /**
+   * The sacrifice: on while the player is choosing which cards to burn, and the ids they
+   * have chosen so far. Kept apart from `selectedId` on purpose -- one is "this card pays
+   * for the move", the other is "these cards buy the right to ignore the cards", and
+   * folding them into one selection would make the two impossible to tell apart.
+   */
+  private sacrificing = false;
+  private sacrificeIds: number[] = [];
   private hand: HandState | null = null;
   private cardEls = new Map<number, HTMLElement>();
   private timers = new Set<ReturnType<typeof setTimeout>>();
@@ -158,9 +168,25 @@ export class CardHand {
   /** The card the player picked, if any. The server chooses when this is null. */
   selection(): number | null { return this.selectedId; }
 
+  /**
+   * The cards a sacrifice would burn, once the full cost has been chosen; null until then.
+   * A part-built pile is not a move that can be made yet, so it reads as nothing.
+   */
+  sacrificeSelection(): number[] | null {
+    if (!this.sacrificing || !this.hand) return null;
+    return this.sacrificeIds.length === this.hand.sacrificeCost
+      ? [...this.sacrificeIds] : null;
+  }
+
+  /** True while the player is building a sacrifice, whether or not it is paid for yet. */
+  sacrificeArmed(): boolean { return this.sacrificing; }
+
   /** Board reach for the current pick, or for the whole hand when nothing is picked. */
   reach(): Set<string> | null {
     if (!this.hand) return null;
+    // A paid-up sacrifice opens the whole board, which is the entire thing it buys.
+    if (this.sacrificeSelection()) return new Set(['k', 'p', 'n', 'b', 'r', 'q']);
+    if (this.sacrificing) return new Set(['k']);
     if (this.selectedId == null) return reachOf(this.hand);
     if (this.selectedId === EMERGENCY_CARD_ID) {
       return new Set(['k', 'p', 'n', 'b', 'r', 'q']);
@@ -172,10 +198,34 @@ export class CardHand {
 
   /** Drop the pick -- after a move lands, or when the turn passes. */
   clearSelection(): void {
-    if (this.selectedId == null) return;
-    this.selectedId = null;
-    this.handlers.onSelect(null);
+    const wasSacrificing = this.sacrificing;
+    this.sacrificing = false;
+    this.sacrificeIds = [];
+    if (this.selectedId != null) {
+      this.selectedId = null;
+      this.handlers.onSelect(null);
+    }
     this.repaintSelection();
+    if (wasSacrificing) {
+      this.renderActions(this.hand);
+      this.renderNote(this.hand);
+      this.handlers.onSacrificeChange?.(false);
+    }
+  }
+
+  /** Start or abandon a sacrifice. Picking one drops the other; they are rival answers. */
+  private toggleSacrifice(): void {
+    if (!this.hand?.sacrificeAvailable && !this.sacrificing) return;
+    this.sacrificing = !this.sacrificing;
+    this.sacrificeIds = [];
+    if (this.sacrificing && this.selectedId != null) {
+      this.selectedId = null;
+      this.handlers.onSelect(null);
+    }
+    this.repaintSelection();
+    this.renderActions(this.hand);
+    this.renderNote(this.hand);
+    this.handlers.onSacrificeChange?.(this.sacrificing);
   }
 
   render(hand: HandState | null, cards: CardsPublic | null, myColor: Color | null): void {
@@ -188,6 +238,17 @@ export class CardHand {
         ? hand.emergency
         : hand.cards.some(c => c.id === this.selectedId && c.playable);
       if (!stillThere || !hand.yourTurn) this.selectedId = null;
+    }
+
+    // and neither can a half-built sacrifice: the cards it named may have been spent, and
+    // the turn it was being built in may have passed
+    if (this.sacrificing) {
+      const live = new Set(hand?.cards.map(c => c.id) ?? []);
+      this.sacrificeIds = this.sacrificeIds.filter(id => live.has(id));
+      if (!hand?.yourTurn || !(hand.sacrificeAvailable || this.sacrificeIds.length > 0)) {
+        this.sacrificing = false;
+        this.sacrificeIds = [];
+      }
     }
 
     this.el.classList.toggle('hand-live', hand?.yourTurn === true);
@@ -227,9 +288,11 @@ export class CardHand {
       </div>` : ''}
       <div class="cards-meta">
         <span title="Cards left in your draw pile">Deck ${me ? me.deckCount : opp.deckCount}</span>
-        <span title="Cards drawn at the start of each turn">Draw to ${cards.drawTarget}</span>
+        <span title="Cards dealt at the start of each turn">Deal ${cards.drawPerTurn}</span>
+        <span title="A hand never grows past this; the deal simply stops">Cap ${cards.handMax}</span>
+        ${sacrificeMeta(cards, me)}
         ${cards.enraged
-          ? '<span class="meta-hot" title="Twenty plies in: both sides draw one more">Enraged</span>'
+          ? '<span class="meta-hot" title="Twenty plies in: both sides deal one more">Enraged</span>'
           : ''}
       </div>`;
   }
@@ -242,6 +305,13 @@ export class CardHand {
     };
     if (!hand) { set('', ''); return; }
     if (!hand.yourTurn) { set('', 'Waiting for your opponent…'); return; }
+    if (this.sacrificing) {
+      const left = hand.sacrificeCost - this.sacrificeIds.length;
+      set('note-sacrifice', left > 0
+        ? `Choose ${left} more card${left > 1 ? 's' : ''} to burn — then move any piece.`
+        : 'Paid. Move any piece you like; these cards are gone.');
+      return;
+    }
     if (hand.emergency) {
       set('note-emergency',
         'No card in your hand can move anything — take the emergency move.');
@@ -254,6 +324,15 @@ export class CardHand {
       const kinds = [...new Set(hand.replaced)].map(k => KIND_PLURAL[k]);
       set('note-swap', `No ${listOf(kinds)} left on the board — `
         + `${hand.replaced.length > 1 ? 'those cards were' : 'that card was'} replaced.`);
+      return;
+    }
+    // Cycling is the quieter cousin of the swap: the hand could not move anything at all,
+    // so the dead cards were dealt past. Same reasoning -- a rule the player cannot see
+    // happening has to say so on the turn it happens.
+    if (hand.cycled.length > 0) {
+      const kinds = [...new Set(hand.cycled)].map(k => KIND_PLURAL[k]);
+      set('note-swap', `Nothing in hand could move — dealt past `
+        + `${hand.cycled.length > 1 ? 'those cards' : 'that card'} (${listOf(kinds)}).`);
       return;
     }
     set('note-live', 'Play a card, or just move — the matching card is spent.');
@@ -322,13 +401,33 @@ export class CardHand {
       <span class="card-name"></span>
       <span class="card-sheen" aria-hidden="true"></span>`;
 
+    const refuse = (): void => {
+      el.classList.remove('card-nope');
+      void el.offsetWidth;                // restart the refusal shake
+      el.classList.add('card-nope');
+    };
+
     el.addEventListener('click', () => {
-      if (el.classList.contains('card-dead') || el.classList.contains('card-spent')) {
-        el.classList.remove('card-nope');
-        void el.offsetWidth;              // restart the refusal shake
-        el.classList.add('card-nope');
+      if (el.classList.contains('card-spent')) return;
+
+      // While a sacrifice is being built every card is fuel, dead ones included -- that is
+      // rather the point of it, and refusing a dead card here would be refusing the only
+      // cards a stuck player has to pay with.
+      if (this.sacrificing) {
+        if (slot.emergency) { refuse(); return; }
+        const at = this.sacrificeIds.indexOf(slot.id);
+        if (at >= 0) this.sacrificeIds.splice(at, 1);
+        else if (this.sacrificeIds.length < (this.hand?.sacrificeCost ?? 0)) {
+          this.sacrificeIds.push(slot.id);
+        } else { refuse(); return; }
+        this.repaintSelection();
+        this.renderActions(this.hand);
+        this.renderNote(this.hand);
+        this.handlers.onSacrificeChange?.(true);
         return;
       }
+
+      if (el.classList.contains('card-dead')) { refuse(); return; }
       this.selectedId = this.selectedId === slot.id ? null : slot.id;
       this.handlers.onSelect(this.selectedId);
       this.repaintSelection();
@@ -350,6 +449,8 @@ export class CardHand {
       'card', `card-${slot.emergency ? 'emergency' : slot.kind}`,
       dead ? 'card-dead' : '',
       this.selectedId === slot.id ? 'card-on' : '',
+      this.sacrificeIds.includes(slot.id) ? 'card-burn' : '',
+      this.sacrificing && slot.emergency ? 'card-dead' : '',
       el.classList.contains('card-dealt') ? 'card-dealt' : '',
     ].filter(Boolean).join(' ');
 
@@ -379,21 +480,54 @@ export class CardHand {
   private repaintSelection(): void {
     for (const [id, el] of this.cardEls) {
       const on = id === this.selectedId;
+      const burning = this.sacrificeIds.includes(id);
       el.classList.toggle('card-on', on);
-      el.setAttribute('aria-pressed', String(on));
+      el.classList.toggle('card-burn', burning);
+      el.setAttribute('aria-pressed', String(on || burning));
     }
   }
 
+  /**
+   * Mulligan and sacrifice, the two ways out of a hand you cannot use.
+   *
+   * Rebuilt whenever either could have changed rather than diffed, because the sacrifice
+   * button's own label is state -- it counts down the cards still to choose -- and a
+   * cheap innerHTML swap of two buttons is not worth the bookkeeping to avoid.
+   */
   private renderActions(hand: HandState | null): void {
-    const want = hand?.mulliganAvailable === true;
-    const has = this.actionsEl.childElementCount > 0;
-    if (want === has) return;
-    if (!want) { this.actionsEl.innerHTML = ''; return; }
-    this.actionsEl.innerHTML = `
-      <button class="btn btn-sm card-mulligan" id="mull"
-        title="Once a game: throw this hand away and draw a new one">Mulligan</button>`;
-    this.actionsEl.querySelector('#mull')!
-      .addEventListener('click', this.handlers.onMulligan);
+    const parts: string[] = [];
+
+    if (hand?.mulliganAvailable === true && !this.sacrificing) {
+      parts.push(`<button class="btn btn-sm card-mulligan" id="mull"
+        title="Once a game: throw this hand away and take a fresh opening hand">Mulligan</button>`);
+    }
+
+    if (hand?.yourTurn) {
+      if (this.sacrificing) {
+        const left = hand.sacrificeCost - this.sacrificeIds.length;
+        parts.push(`<button class="btn btn-sm card-sacrifice on" id="sac">
+          ${left > 0 ? `Burn ${left} more` : 'Move any piece'}</button>`);
+        parts.push(`<button class="btn btn-sm btn-ghost" id="sacoff">Cancel</button>`);
+      } else if (hand.sacrificeAvailable) {
+        parts.push(`<button class="btn btn-sm card-sacrifice" id="sac"
+          title="Burn ${hand.sacrificeCost} cards to move any piece you like">
+          Sacrifice ${hand.sacrificeCost}</button>`);
+      } else if (hand.sacrificeReadyIn > 0) {
+        parts.push(`<span class="card-sacrifice-wait"
+          title="The sacrifice comes back once enough of the game has passed">
+          Sacrifice in ${hand.sacrificeReadyIn}</span>`);
+      }
+    }
+
+    const html = parts.join('');
+    if (this.actionsEl.innerHTML === html) return;
+    this.actionsEl.innerHTML = html;
+    this.actionsEl.querySelector('#mull')
+      ?.addEventListener('click', this.handlers.onMulligan);
+    this.actionsEl.querySelector('#sac')
+      ?.addEventListener('click', () => this.toggleSacrifice());
+    this.actionsEl.querySelector('#sacoff')
+      ?.addEventListener('click', () => this.toggleSacrifice());
   }
 
   destroy(): void {
@@ -401,6 +535,22 @@ export class CardHand {
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
   }
+}
+
+/**
+ * How the sacrifice reads on the shared table: its price, or the wait still to serve.
+ *
+ * A spectator holds no side, so there is no cooldown that is theirs to be told about --
+ * they get the price alone rather than one player'''s countdown labelled as if it were
+ * everyone'''s.
+ */
+function sacrificeMeta(cards: CardsPublic, me: CardSidePublic | null): string {
+  if (me && me.sacrificeReadyIn > 0) {
+    return `<span title="Plies until you may sacrifice again">`
+      + `Sacrifice in ${me.sacrificeReadyIn}</span>`;
+  }
+  return `<span title="Burn ${cards.sacrificeCost} cards to move any piece">`
+    + `Sacrifice ${cards.sacrificeCost}</span>`;
 }
 
 /** "knights", "knights and rooks", "knights, rooks and queens". */

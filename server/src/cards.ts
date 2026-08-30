@@ -23,40 +23,53 @@ export const FREE_PIECE = 'k';
  * These are balance, not rules, and they are exported mutable so `test/balance.mjs` can
  * sweep them against simulated games. Nothing at runtime writes to this.
  *
- * What they have to buy is a hand that actually constrains. The first pass took the design
- * doc's figures literally -- five cards, four Wilds in thirty-six -- and measured far too
- * loose: on 33% of turns every legal move was affordable anyway, and 73% of all legal
- * moves were. Playtesting put it plainly: "feels like I can always move almost any piece."
+ * What they have to buy is a hand that actually constrains -- "I can see the move, can I
+ * play it?" only works while the answer is often no -- without the hand feeling like a
+ * cage. The first pass took the design doc's figures literally (five cards, four Wilds in
+ * thirty-six) and measured far too loose: 33% of turns had every legal move affordable
+ * anyway. Cutting Wild to a single copy and the hand to three fixed the measurement and
+ * broke the feel: three cards is a hand you read in a second and then wait out.
  *
- * Two causes, and the harness separates them. A hand of five out of only six kinds holds
- * 3.4 distinct kinds, which covers most of what a position offers; and a Wild unlocks
- * everything at once, which 26% of turns had one of. Cutting Wild to a single copy and the
- * hand to three takes the unconstrained share to 9% and move coverage to 56%.
- *
- * Going thinner still works on paper and not in play: hand-of-two, or a pawn-light deck,
- * pushes the emergency move from 3% of turns to 4-5%, and the doc is explicit that it is
- * "a safety net, not a normal way to play". `docs/BALANCE.md` has the full table.
+ * The shape now is the doc's own economy rather than a refill target. You open with one
+ * card per piece kind, so no game starts stuck; you draw two a turn and spend one, so a
+ * quiet turn banks a card; and the hand caps at seven, which is the doc's cap and the
+ * thing that makes hoarding a real decision rather than a free one. The pressure that
+ * used to come from a small hand now comes from the deck: it is heavily duplicated, so
+ * seven cards is still only about three distinct kinds. `docs/BALANCE.md` has the table.
  */
 export const TUNING = {
+  /** Section 10's card lock: at seven, the draw simply does not happen. */
   handMax: 7,
-  drawTarget: 3,
-  enrageDrawTarget: 4,
+  /**
+   * The opening hand: one card for each piece kind.
+   *
+   * Dealt rather than drawn, so the first turn of every game offers the whole board and
+   * the mode introduces itself by what it takes away over the next few turns rather than
+   * by a first hand of three pawns.
+   */
+  openingKinds: ['pawn', 'knight', 'bishop', 'rook', 'queen'] as CardKind[],
+  /** Cards dealt at the start of each turn -- two, against the one card a move costs. */
+  drawPerTurn: 2,
+  enrageDrawPerTurn: 3,
   /**
    * Soft enrage after twenty plies. The design doc says "20 полного ходов (10 ходов White
    * + 10 ходов Black)" -- the parenthetical is the binding one, so it is twenty
    * half-moves, counted off the same history the move list is drawn from.
    */
   enrageAfterPlies: 20,
+  /** Cards a sacrifice costs, and how many plies must pass before another is allowed. */
+  sacrificeCost: 3,
+  sacrificeCooldownPlies: 10,
   /**
    * One fixed symmetrical deck for both players; no deckbuilding in the MVP.
    *
-   * The doc's shape, still thirty-six, with Wild cut from four copies to one. Duplicates
-   * are what make a hand bite -- three cards spread over three kinds is a real position to
-   * solve, where five over five is none -- so the copies freed by Wild went to the pieces
-   * that already had the most.
+   * The doc's shape, still thirty-six, with Wild cut from four copies to one and the
+   * copies it freed given to the pieces that already had the most. Duplicates are the
+   * whole source of constraint: seven cards spread over six kinds would be no constraint
+   * at all, and seven cards that keep turning out to be four pawns is a position to solve.
    */
   deck: [
-    ['pawn', 11], ['knight', 8], ['bishop', 8], ['rook', 5], ['queen', 3], ['wild', 1],
+    ['pawn', 14], ['knight', 8], ['bishop', 7], ['rook', 4], ['queen', 2], ['wild', 1],
   ] as Array<[CardKind, number]>,
 };
 
@@ -79,12 +92,38 @@ export interface CardSide {
   emergency: boolean;
   /** Kinds swapped out this turn because that piece is gone from the board. */
   lastReplaced: CardKind[];
+  /** Kinds cycled away this turn looking for something that could move. */
+  lastCycled: CardKind[];
+  sacrificesUsed: number;
+  /** Ply count when the last sacrifice was paid, or null. Drives the cooldown. */
+  lastSacrificePly: number | null;
+  /**
+   * How many of this side's turns have been opened.
+   *
+   * The opening hand *is* the deal for the first turn, so the first turn opens without
+   * one. Without this the deal lands on top of the opening hand before White has moved at
+   * all, which takes a carefully composed five-card hand of one-per-piece and makes it
+   * seven random cards before anybody has seen it.
+   */
+  openedTurns: number;
 }
 
 export interface CardsState {
   white: CardSide;
   black: CardSide;
   seq: number;
+  /**
+   * The ply count the current turn was opened at, or null before the first one.
+   *
+   * A fixed deal is not idempotent the way a refill-to-target was: every path that re-arms
+   * a turn -- a declined takeback, a seat turning into a bot mid-turn -- used to be free to
+   * call `beginCardTurn` again, and would now deal two more cards each time. This is the
+   * marker that makes reopening the same turn do nothing. It lives on the cards rather
+   * than the room so a takeback restores it along with the hands: an undone ply puts the
+   * position back to a turn that was already opened, and dealing into it again would hand
+   * the player two cards for a move they are about to make over.
+   */
+  openedPly: number | null;
 }
 
 function shuffle<T>(a: T[]): T[] {
@@ -104,16 +143,48 @@ function makeSide(seqStart: number): { side: CardSide; seq: number } {
   shuffle(deck);
   const side: CardSide = {
     hand: [], deck, discard: [], mulliganUsed: false,
-    played: [], emergenciesUsed: 0, emergency: false, lastReplaced: [],
+    played: [], emergenciesUsed: 0, emergency: false, lastReplaced: [], lastCycled: [],
+    sacrificesUsed: 0, lastSacrificePly: null, openedTurns: 0,
   };
-  drawUpTo(side, TUNING.drawTarget);
+  dealOpening(side);
   return { side, seq };
+}
+
+/**
+ * The opening hand: one card of each piece kind, taken out of the piles that already hold
+ * them rather than conjured, so the thirty-six cards a side owns stay thirty-six.
+ *
+ * At the start of a game the deck holds every kind and this is a straight deal. After a
+ * mulligan it may not -- the Queen cards could all be in the discard -- so the discard is
+ * searched too, and a kind that exists in neither falls back to an ordinary draw. That
+ * last case is what keeps a mulligan from handing back a hand of three because the deck
+ * happened to be out of rooks.
+ */
+export function dealOpening(side: CardSide): Card[] {
+  const dealt: Card[] = [];
+  for (const kind of TUNING.openingKinds) {
+    if (side.hand.length >= TUNING.handMax) break;
+    const card = takeKind(side, kind) ?? drawOne(side);
+    if (!card) break;                       // both piles empty: nothing left anywhere
+    side.hand.push(card);
+    dealt.push(card);
+  }
+  return dealt;
+}
+
+/** Lift one card of a named kind out of the deck, or failing that the discard. */
+function takeKind(side: CardSide, kind: CardKind): Card | null {
+  for (const pile of [side.deck, side.discard]) {
+    const at = pile.findIndex(c => c.kind === kind);
+    if (at >= 0) return pile.splice(at, 1)[0];
+  }
+  return null;
 }
 
 export function createCards(): CardsState {
   const w = makeSide(0);
   const b = makeSide(w.seq);
-  return { white: w.side, black: b.side, seq: b.seq };
+  return { white: w.side, black: b.side, seq: b.seq, openedPly: null };
 }
 
 /** Exhausting the deck reshuffles the discard into a new one, as at a table. */
@@ -126,9 +197,18 @@ function drawOne(side: CardSide): Card | null {
   return side.deck.pop() ?? null;
 }
 
-export function drawUpTo(side: CardSide, target: number): number {
+/**
+ * The start-of-turn deal: a fixed number of cards, not a refill to a target.
+ *
+ * The difference is the whole hand economy. Refilling to a target means a quiet turn and
+ * a busy turn leave you in exactly the same place, so a card is never really banked; a
+ * fixed deal against a one-card move cost means a turn you spend nothing on is a turn you
+ * come out of one card richer -- until the cap, where section 10's card lock bites and
+ * holding on starts costing draws.
+ */
+export function drawCards(side: CardSide, n: number): number {
   let drawn = 0;
-  while (side.hand.length < target && side.hand.length < TUNING.handMax) {
+  for (let i = 0; i < n && side.hand.length < TUNING.handMax; i++) {
     const c = drawOne(side);
     if (!c) break;
     side.hand.push(c);
@@ -146,8 +226,8 @@ export function drawBonus(side: CardSide): number {
   return 1;
 }
 
-export function drawTargetFor(plies: number): number {
-  return isEnraged(plies) ? TUNING.enrageDrawTarget : TUNING.drawTarget;
+export function drawPerTurnFor(plies: number): number {
+  return isEnraged(plies) ? TUNING.enrageDrawPerTurn : TUNING.drawPerTurn;
 }
 
 export function isEnraged(plies: number): boolean {
@@ -270,10 +350,114 @@ export function replaceExtinct(side: CardSide, extinct: Set<string>): CardKind[]
   return replaced;
 }
 
+/**
+ * Deal past a hand that cannot move anything, one card at a time, until it can.
+ *
+ * This is the design doc's draw protection (section 7), and it is what a dead hand should
+ * meet when the king is not under attack. The emergency move was standing in for it, and
+ * standing in badly: it is a far bigger gift -- it opens *every* piece at once, where
+ * cycling hands you one card and no more -- and it charges for it, so the common case of
+ * "my three cards happen to be useless right now" was being both over-rewarded and fined.
+ *
+ * Cycling is free. Its cost is the deck: the cards go to the discard and come back around
+ * later, so a player who cycles often is thinning their own draws.
+ *
+ * Bounded the same way the extinction swap is. If no card anywhere can move anything --
+ * a player down to a bare king, where only the free king move exists -- there is nothing
+ * to find and it does not churn.
+ */
+export function cycleForPlayable(side: CardSide, chess: Chess): CardKind[] {
+  const movable = movableTypes(chess);
+  if (side.hand.some(c => cardPlayable(c, movable))) return [];
+
+  const outside = side.deck.length + side.discard.length;
+  const anyLive = side.deck.some(c => cardPlayable(c, movable))
+    || side.discard.some(c => cardPlayable(c, movable));
+  if (!anyLive) return [];
+
+  const cycled: CardKind[] = [];
+  // held back so a card just cycled away cannot be reshuffled and dealt straight back
+  const retired: Card[] = [];
+  let guard = outside + 1;
+
+  while (guard-- > 0 && !side.hand.some(c => cardPlayable(c, movable))) {
+    const dead = side.hand.shift();
+    if (!dead) break;
+    const fresh = drawOne(side);
+    if (!fresh) { side.hand.unshift(dead); break; }
+    side.hand.push(fresh);
+    retired.push(dead);
+    cycled.push(dead.kind);
+  }
+
+  side.discard.push(...retired);
+  return cycled;
+}
+
+// ---------- the sacrifice ----------
+
+/**
+ * Burn a fistful of cards to move whatever you like, once every so often.
+ *
+ * The mode's sharpest moment is seeing the winning move and holding the wrong cards for
+ * it. Cycling and the emergency net both answer the *dead* hand -- nothing at all to move
+ * -- but neither answers the far more common and far more painful case: a hand full of
+ * perfectly good cards, none of them the Rook this position is asking for. Until now the
+ * only reply to that was to play something else and hope the position survived.
+ *
+ * So: three cards for one move of any piece, and then not again for ten plies. Every part
+ * of that is doing a job. The cost is paid from the hand the player chose to keep, so it
+ * is real -- three cards is most of a hand and two turns of drawing. The cooldown is what
+ * stops it becoming the way the game is played rather than the way a game is rescued: at
+ * a card lock of seven and a deal of two, ten plies is roughly the time it takes to be
+ * able to afford one again, so the mode is a card game that occasionally buys its way out
+ * rather than a chess game with a card-shaped tax.
+ *
+ * The player names the cards. Taking them at random, the way the emergency move does,
+ * would be tolerable there -- an emergency hand is all dead cards anyway -- but here the
+ * whole point is that the hand is worth something, and being charged for it blind is not
+ * a decision, it is a dice roll.
+ */
+
+/** Plies until this side may sacrifice again; 0 means now. */
+export function sacrificeReadyIn(side: CardSide, plies: number): number {
+  if (side.lastSacrificePly == null) return 0;
+  const since = plies - side.lastSacrificePly;
+  return Math.max(0, TUNING.sacrificeCooldownPlies - since);
+}
+
+/** True when a sacrifice is both off cooldown and affordable out of this hand. */
+export function canSacrifice(side: CardSide, plies: number): boolean {
+  return sacrificeReadyIn(side, plies) === 0 && side.hand.length >= TUNING.sacrificeCost;
+}
+
 export type Spend =
   | { kind: 'none' }                  // a king move costs nothing
   | { kind: 'card'; card: Card }
+  | { kind: 'sacrifice'; cards: Card[]; plies: number }
   | { kind: 'emergency' };
+
+/**
+ * Validate a named sacrifice: exactly the cost, all distinct, all actually in hand, and
+ * off cooldown. Nothing here looks at the piece -- paying the cost is what buys the right
+ * to ignore it, which is the entire mechanic.
+ */
+export function resolveSacrifice(side: CardSide, ids: unknown, plies: number): Spend | null {
+  if (!Array.isArray(ids) || ids.length !== TUNING.sacrificeCost) return null;
+  if (sacrificeReadyIn(side, plies) > 0) return null;
+
+  const seen = new Set<number>();
+  const cards: Card[] = [];
+  for (const raw of ids) {
+    const id = Number(raw);
+    if (!Number.isFinite(id) || seen.has(id)) return null;
+    const card = side.hand.find(c => c.id === id);
+    if (!card) return null;
+    seen.add(id);
+    cards.push(card);
+  }
+  return { kind: 'sacrifice', cards, plies };
+}
 
 /**
  * Decide which card pays for a move.
@@ -323,6 +507,13 @@ export function commitSpend(side: CardSide, spend: Spend): CardKind | null {
   if (spend.kind === 'none') return null;
   if (spend.kind === 'card') { discardCard(side, spend.card); return spend.card.kind; }
 
+  if (spend.kind === 'sacrifice') {
+    for (const card of spend.cards) discardCard(side, card);
+    side.sacrificesUsed++;
+    side.lastSacrificePly = spend.plies;
+    return spend.cards[0]?.kind ?? null;
+  }
+
   side.emergenciesUsed++;
   if (side.hand.length > 0) {
     const victim = side.hand[Math.floor(Math.random() * side.hand.length)];
@@ -332,18 +523,26 @@ export function commitSpend(side: CardSide, spend: Spend): CardKind | null {
   return null;
 }
 
-/** Once per game: throw the hand away and take a fresh one of the current size. */
-export function mulligan(side: CardSide, target: number): boolean {
+/**
+ * Once per game: throw the hand away and take a fresh opening hand.
+ *
+ * A mulligan deals the opening spread -- one card per piece kind -- rather than the same
+ * number of random cards. A hand that has to be mulliganed is one that could not reach
+ * the board, and dealing it another random draw is as likely to repeat the problem as fix
+ * it. The cost is what it always was: the cards banked up to now are gone, and a hand of
+ * seven becomes a hand of five.
+ */
+export function mulligan(side: CardSide): boolean {
   if (side.mulliganUsed) return false;
   side.mulliganUsed = true;
   while (side.hand.length > 0) side.discard.push(side.hand.pop()!);
-  drawUpTo(side, target);
+  dealOpening(side);
   return true;
 }
 
 // ---------- serialisation ----------
 
-function sidePublic(side: CardSide): CardSidePublic {
+function sidePublic(side: CardSide, plies: number): CardSidePublic {
   return {
     handCount: side.hand.length,
     deckCount: side.deck.length,
@@ -351,15 +550,22 @@ function sidePublic(side: CardSide): CardSidePublic {
     mulliganUsed: side.mulliganUsed,
     emergenciesUsed: side.emergenciesUsed,
     played: side.played,
+    sacrificesUsed: side.sacrificesUsed,
+    // Public on purpose. The opponent watched three cards go on the discard, so the fact
+    // of the cooldown is already theirs; hiding the count left would only mean both
+    // players counting plies on their fingers.
+    sacrificeReadyIn: sacrificeReadyIn(side, plies),
   };
 }
 
 /** What both players may see: counts and a face-up discard, never a hand. */
 export function cardsPublic(cards: CardsState, plies: number): CardsPublic {
   return {
-    white: sidePublic(cards.white),
-    black: sidePublic(cards.black),
-    drawTarget: drawTargetFor(plies),
+    white: sidePublic(cards.white, plies),
+    black: sidePublic(cards.black, plies),
+    drawPerTurn: drawPerTurnFor(plies),
+    handMax: TUNING.handMax,
+    sacrificeCost: TUNING.sacrificeCost,
     enraged: isEnraged(plies),
   };
 }
@@ -389,6 +595,13 @@ export function snapshotCards(cards: CardsState): CardsState {
     emergenciesUsed: s.emergenciesUsed,
     emergency: s.emergency,
     lastReplaced: [...s.lastReplaced],
+    lastCycled: [...s.lastCycled],
+    sacrificesUsed: s.sacrificesUsed,
+    lastSacrificePly: s.lastSacrificePly,
+    openedTurns: s.openedTurns,
   });
-  return { white: clone(cards.white), black: clone(cards.black), seq: cards.seq };
+  return {
+    white: clone(cards.white), black: clone(cards.black),
+    seq: cards.seq, openedPly: cards.openedPly,
+  };
 }

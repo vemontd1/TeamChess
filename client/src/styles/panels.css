@@ -337,6 +337,58 @@
 .move-auto { color: var(--danger); font-weight: 600; }
 .move-bot { color: #A491DC; }
 
+/* ---- stepping back through the game ----------------------------------------
+   Every ply is a button, because the server records the position each one produced. The
+   cell keeps the exact metrics of the span it replaced -- a move list that reflowed the
+   moment it became clickable would be a worse move list. */
+
+.move-cell {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin: -1px -4px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: background var(--dur-ui) var(--ease-out);
+}
+.move-cell:hover { background: rgba(255, 255, 255, 0.06); }
+.move-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.move-cell.at {
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px var(--accent-glow);
+}
+
+.review-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.review-bar[hidden] { display: none; }
+.review-bar .btn-icon { padding: 4px 8px; font-size: calc(11px * var(--ui)); }
+.review-bar .btn:disabled { opacity: 0.3; cursor: default; }
+
+.review-at {
+  flex: 1;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--ui));
+  color: var(--text-faint);
+  letter-spacing: 0.08em;
+}
+/* While a past position is on the board the bar says so, since the board itself is the
+   thing that looks wrong if you have forgotten. */
+.review-bar.reviewing { background: var(--accent-wash); }
+.review-bar.reviewing .review-at { color: var(--accent); }
+.review-bar #rvlive { visibility: hidden; }
+.review-bar.reviewing #rvlive { visibility: visible; }
+
 .empty-note {
   color: var(--text-faint);
   font-size: calc(12.5px * var(--ui));
@@ -516,3 +568,85 @@
   animation: urgent 1s infinite;
 }
 
+
+/* ---- your own record, on the home screen -----------------------------------
+   Appears only once a game has been played. An empty tally would invite the reader to
+   go looking for the thing that is broken, and nothing is. */
+
+.prof-panel { margin-top: calc(18px * var(--ui)); }
+
+.prof-name {
+  margin-left: auto;
+  font-size: calc(12px * var(--ui));
+  color: var(--text-dim);
+}
+
+.prof-record {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: calc(11.5px * var(--ui));
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+}
+.prof-tally b {
+  font-family: var(--font-display);
+  font-size: calc(17px * var(--ui));
+  color: var(--text);
+  margin-right: 3px;
+}
+.prof-note {
+  margin-left: auto;
+  font-size: calc(10px * var(--ui));
+  border-bottom: 1px dotted var(--line);
+  cursor: help;
+}
+
+.prof-games { max-height: calc(260px * var(--ui)); overflow-y: auto; }
+
+.prof-game {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 16px;
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  font: inherit;
+  color: var(--text-dim);
+  font-size: calc(12px * var(--ui));
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-ui) var(--ease-out);
+}
+.prof-game:nth-child(odd) { background: rgba(255, 255, 255, 0.014); }
+.prof-game:hover { background: var(--accent-wash); border-left-color: var(--accent); }
+.prof-game:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.prof-game:disabled { opacity: 0.5; cursor: progress; }
+
+.prof-res {
+  display: grid;
+  place-items: center;
+  width: calc(20px * var(--ui));
+  height: calc(20px * var(--ui));
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: calc(10.5px * var(--ui));
+  font-weight: 700;
+}
+.prof-res-win  { background: rgba(120, 190, 120, 0.16); color: #86C58A; }
+.prof-res-loss { background: rgba(214, 90, 70, 0.16); color: #D97F6C; }
+.prof-res-draw { background: rgba(255, 255, 255, 0.07); color: var(--text-dim); }
+.prof-res-none { background: rgba(255, 255, 255, 0.04); color: var(--text-faint); }
+
+.prof-vs { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prof-vs b { color: var(--text); font-weight: 500; }
+.prof-mode, .prof-plies, .prof-when {
+  font-size: calc(10.5px * var(--ui));
+  color: var(--text-faint);
+  white-space: nowrap;
+}

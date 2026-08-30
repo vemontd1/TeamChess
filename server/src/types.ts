@@ -35,12 +35,18 @@ export interface CardSidePublic {
   mulliganUsed: boolean;
   emergenciesUsed: number;
   played: CardKind[];
+  sacrificesUsed: number;
+  /** Plies until this side may sacrifice again; 0 means now. */
+  sacrificeReadyIn: number;
 }
 
 export interface CardsPublic {
   white: CardSidePublic;
   black: CardSidePublic;
-  drawTarget: number;   // 5, or 6 once soft enrage is on
+  /** Cards dealt at the start of a turn: two, or three once soft enrage is on. */
+  drawPerTurn: number;
+  handMax: number;
+  sacrificeCost: number;
   enraged: boolean;
 }
 
@@ -56,11 +62,18 @@ export interface HandState {
   emergency: boolean;
   mulliganAvailable: boolean;
   yourTurn: boolean;
+  /** Kinds cycled away this turn while looking for something that could move. */
+  cycled: CardKind[];
   /**
    * Kinds swapped out at the start of this turn because that piece is gone from the
    * board. Reported so the swap can be explained rather than just happening.
    */
   replaced: CardKind[];
+  /** Cards a sacrifice costs, and whether one can be paid out of this hand right now. */
+  sacrificeCost: number;
+  sacrificeAvailable: boolean;
+  /** Plies until the sacrifice comes off cooldown; 0 when it is ready. */
+  sacrificeReadyIn: number;
 }
 
 export interface SeatStats {
@@ -100,6 +113,16 @@ export interface HistoryEntry {
   playerName: string;
   auto: boolean;   // forced by timeout
   bot: boolean;    // played by a bot seat
+  /**
+   * The position this ply produced.
+   *
+   * Carried per ply rather than replayed from the SAN list on demand: a client stepping
+   * back through the game then needs no chess engine and no replay loop, and an archived
+   * game is reviewable exactly as it was even if the move generator ever changes under it.
+   */
+  fen: string;
+  from: string;
+  to: string;
 }
 
 export interface PendingTakeback {
@@ -149,6 +172,73 @@ export interface RoomState {
   config: RoomConfig;
 }
 
+// --- the archive: finished games kept on disk ---
+
+export type GameResult = 'white' | 'black' | 'draw' | 'unfinished';
+
+/** Enough of a game to list it without opening the file it lives in. */
+export interface GameSummary {
+  id: string;
+  roomId: string;
+  mode: GameMode;
+  finishedAt: number;
+  plies: number;
+  white: string[];
+  black: string[];
+  result: GameResult;
+  reason: string;
+}
+
+/**
+ * A whole finished game. `history` carries a FEN per ply, so replaying this needs no move
+ * generator at either end -- the archive is a record of positions, not of instructions
+ * for reconstructing them.
+ */
+export interface ArchivedGame {
+  id: string;
+  finishedAt: number;
+  roomId: string;
+  config: RoomConfig;
+  white: string[];
+  black: string[];
+  history: HistoryEntry[];
+  startFen: string;
+  finalFen: string;
+  result: GameResult;
+  reason: string;
+}
+
+// --- profiles ---
+
+export interface ProfileRecord { wins: number; losses: number; draws: number; }
+
+/**
+ * A player, as thinly as a player can be recorded: a name, a tally, and the games behind
+ * it. There is no account and no password -- the browser's own token is the identity, and
+ * the id below is a hash of it, so a profile can be read from a URL without that URL
+ * being the credential that reclaims the player's seats.
+ */
+export interface Profile {
+  id: string;
+  name: string;
+  createdAt: number;
+  lastSeenAt: number;
+  games: number;
+  record: ProfileRecord;
+}
+
+/** One archived game as it looked from a particular player's side of the board. */
+export interface ProfileGame extends GameSummary {
+  yourColor: Color;
+  yourResult: 'win' | 'loss' | 'draw';
+  opponents: string[];
+}
+
+export interface ProfileView {
+  profile: Profile;
+  games: ProfileGame[];
+}
+
 export interface Seat { color: Color; seatId: number; }
 
 export interface You {
@@ -167,6 +257,12 @@ export interface MovePayload {
   from: string; to: string; promotion?: string;
   /** Cards mode: which card pays for this move. Omitted lets the server choose. */
   cardId?: number;
+  /**
+   * Cards mode: burn these cards instead, and move whatever you like. Takes precedence
+   * over `cardId`, and is refused outright unless it names exactly the cost, in cards the
+   * hand actually holds, off cooldown.
+   */
+  sacrificeIds?: number[];
 }
 export interface TakebackRespondPayload { accept: boolean; }
 export interface DrawRespondPayload { accept: boolean; }

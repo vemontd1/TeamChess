@@ -29,6 +29,7 @@ export class TimerRing {
   private label: HTMLElement;
   private ring: HTMLElement;
   private fire: FireRing;
+  private sizeObs: ResizeObserver | null = null;
   private raf = 0;
   /** The server's own value, kept only to notice when the turn changes. */
   private serverDeadline: number | null = null;
@@ -68,6 +69,17 @@ export class TimerRing {
 
     this.fire = new FireRing(BOX, R);
     this.ring.insertBefore(this.fire.canvas, this.ring.firstChild);
+
+    // The ring is sized in CSS from `--ui`, so its pixel size is not BOX on every display.
+    // Measuring it is the only thing that stays true across scale steps, a window resize
+    // and a browser zoom -- and getting it wrong put the fire beside the clock, not on it.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.sizeObs = new ResizeObserver(entries => {
+        const w = entries[0]?.contentRect.width ?? 0;
+        if (w > 0) this.fire.setDisplaySize(w);
+      });
+      this.sizeObs.observe(this.ring);
+    }
   }
 
   setSound(on: boolean): void { this.soundOn = on; }
@@ -144,6 +156,8 @@ export class TimerRing {
   destroy(): void {
     cancelAnimationFrame(this.raf);
     this.raf = 0;
+    this.sizeObs?.disconnect();
+    this.sizeObs = null;
     this.fire.destroy();
   }
 }

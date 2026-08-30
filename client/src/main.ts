@@ -32,7 +32,10 @@ async function route(): Promise<void> {
   const roomId = parseRoute();
 
   if (!roomId) {
-    setState({ room: null, you: null, orientationOverride: null, chat: [], marks: [] });
+    setState({
+      room: null, you: null, orientationOverride: null, chat: [], marks: [],
+      reviewPly: null, archived: null,
+    });
     renderHome(app, id => { location.hash = `#/r/${id}`; });
     return;
   }
@@ -54,6 +57,8 @@ async function route(): Promise<void> {
   setState({
     you: res.you ?? null, room: res.state ?? null, orientationOverride: null,
     chat: [], marks: [],
+    // a review is a lens over one room's game; entering another room is not that game
+    reviewPly: null, archived: null,
   });
   teardown = renderRoom(app, roomId, () => { location.hash = ''; });
 }

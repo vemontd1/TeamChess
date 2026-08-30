@@ -121,6 +121,8 @@
 .note-emergency { color: var(--danger); font-weight: 500; }
 /* A swap is news, not a warning: the accent rather than the danger colour. */
 .note-swap { color: var(--accent); }
+/* A sacrifice is being built: an instruction, and the only note that is one. */
+.note-sacrifice { color: #E8B04B; font-weight: 500; }
 
 /* ---- the hand ---- */
 
@@ -438,6 +440,58 @@
 }
 
 .card-mulligan { align-self: center; }
+
+/* ---- the sacrifice ----------------------------------------------------------
+   Three cards for one move of any piece. The button is warm rather than red: it is an
+   expensive thing to do, not a dangerous one, and the cards on the pile say what it costs
+   far better than a colour could. */
+
+.card-sacrifice {
+  align-self: center;
+  border-color: rgba(232, 176, 75, 0.4);
+  color: #E8B04B;
+}
+.card-sacrifice:hover { border-color: #E8B04B; background: rgba(232, 176, 75, 0.1); }
+.card-sacrifice.on {
+  background: rgba(232, 176, 75, 0.16);
+  border-color: #E8B04B;
+  color: var(--text);
+}
+
+.card-sacrifice-wait {
+  align-self: center;
+  font-size: calc(11px * var(--ui));
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+  padding: 5px 0;
+}
+
+/* A card on the pile: pulled down out of the hand and burning, rather than lifted the way
+   a picked card is. The two selections have to be impossible to confuse, because one pays
+   for a move and the other pays to ignore the cards entirely. */
+.card-burn,
+.card-burn:hover {
+  transform: translateY(9px) scale(0.94);
+  opacity: 1;
+  filter: none;
+  border-color: #E86A2C;
+  color: var(--text);
+  box-shadow:
+    0 0 0 1px #E86A2C,
+    0 -10px 24px rgba(232, 106, 44, 0.34),
+    inset 0 -20px 26px -18px rgba(232, 106, 44, 0.8);
+}
+.card-burn .card-art { transform: scale(0.94); opacity: 0.75; }
+.card-burn .card-pip { color: #F0A050; }
+
+.fx-full .card-burn { animation: card-burning 1.5s var(--ease-in-out) infinite; }
+
+@keyframes card-burning {
+  0%, 100% { box-shadow: 0 0 0 1px #E86A2C, 0 -10px 24px rgba(232, 106, 44, 0.30),
+                         inset 0 -20px 26px -18px rgba(232, 106, 44, 0.7); }
+  50%      { box-shadow: 0 0 0 1px #F2853F, 0 -14px 30px rgba(232, 106, 44, 0.48),
+                         inset 0 -22px 28px -16px rgba(255, 140, 60, 0.95); }
+}
 
 @media (max-width: 640px) {
   .cards-wrap { --card-w: 56px; --card-h: 80px; }
