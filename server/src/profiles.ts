@@ -1,21 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
 import type { Color, GameSummary, Profile, ProfileGame, ProfileView } from './types.js';
 
 /**
- * Minimal player profiles: a name, a tally, and the games behind it.
+ * Player profiles: a name, a tally, and the games behind it.
  *
- * There is no account here and deliberately so. A player is already identified to this
- * server by the token their browser keeps in localStorage -- it is what reclaims a seat
- * after a refresh -- so a profile is just that identity given somewhere to accumulate.
- * Nobody signs up, nobody has a password to lose, and a profile costs one join to create.
+ * A profile belongs to an account and is keyed by the account's id, which is why
+ * registration exists at all. Keying it on the browser token instead -- as this did --
+ * meant a record that could not survive clearing the browser and could not follow a
+ * player to a second device, because that token is storage, not an identity.
  *
- * The token itself never becomes the profile id. That token is a bearer credential: hand
- * it out in a URL and you have handed out the seats it can reclaim. The id is a hash of
- * it, so it is stable, derivable without a lookup table, and useless to anyone who reads
- * it off a link.
+ * Guests are simply not recorded. There is nothing to record them against, and inventing
+ * a per-browser identity to hang it on is exactly the thing that did not work.
  *
  * Storage matches `archive.ts` -- one JSON file per profile under `PROFILES_DIR`,
  * defaulting to `data/profiles`. Each file carries the player's own game list rather than
@@ -59,17 +56,6 @@ function ensureDir(): boolean {
   }
 }
 
-/**
- * The public id for a browser token: a truncated SHA-256.
- *
- * Sixteen hex characters is 64 bits, which is far more than enough to keep a few thousand
- * players from colliding, and short enough to sit in a URL without looking like a secret
- * -- which matters, because the thing it is derived from is one.
- */
-export function profileIdFor(token: string): string {
-  return createHash('sha256').update(`bl-profile:${token}`).digest('hex').slice(0, 16);
-}
-
 export function initProfiles(): void {
   if (ready) return;
   ready = true;
@@ -111,15 +97,14 @@ function load(id: string): StoredProfile | null {
 }
 
 /**
- * Create or refresh the profile behind a token, and return it.
+ * Create or refresh the profile behind an account, and return it.
  *
- * Called on every join, which is what keeps the display name current: a player who
- * renames themselves on the home screen is that new name from their next game on, and
- * the games already recorded keep the name they were played under.
+ * Called whenever a signed-in player joins a room, which is what keeps the display name
+ * current if the account is ever renamed. Games already recorded keep the name they were
+ * played under.
  */
-export function touchProfile(token: string, name: string): Profile {
+export function touchProfile(id: string, name: string): Profile {
   if (!ready) initProfiles();
-  const id = profileIdFor(token);
   const now = Date.now();
   let p = cache.get(id);
   if (!p) {
@@ -151,13 +136,12 @@ function publicOf(p: StoredProfile): Profile {
 
 /** Record a finished game against one player's profile, from their side of the board. */
 export function recordGame(
-  token: string, name: string, summary: GameSummary, color: Color,
+  id: string, name: string, summary: GameSummary, color: Color,
 ): void {
   if (!ready) initProfiles();
-  const id = profileIdFor(token);
   let p = cache.get(id);
   if (!p) {
-    touchProfile(token, name);
+    touchProfile(id, name);
     p = cache.get(id)!;
   }
 
@@ -186,16 +170,13 @@ export function recordGame(
 }
 
 export function profileView(id: string, limit = 25): ProfileView | null {
-  if (!/^[a-f0-9]{16}$/.test(id)) return null;   // the id goes into a filename
+  // the id goes into a filename, so it is matched against a strict shape rather than
+  // sanitised -- anything that is not an account id simply is not one
+  if (!/^[a-f0-9]{16}$/.test(id)) return null;
   const p = load(id);
   if (!p) return null;
   return {
     profile: publicOf(p),
     games: p.games.slice(0, Math.min(Math.max(1, limit), MAX_GAMES)),
   };
-}
-
-/** The caller's own profile, addressed by the token rather than the derived id. */
-export function myProfile(token: string, limit = 25): ProfileView | null {
-  return profileView(profileIdFor(token), limit);
 }

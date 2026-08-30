@@ -32,7 +32,8 @@ clock run down.
 ## Chess Cards
 
 Each card names a piece type, and you may only move a piece you hold the card for; playing
-it spends it. **The king never needs a card**, so no hand can lock you out of the game.
+it spends it. **An ordinary king move never needs a card**, so no hand can lock you out of
+the game — castling is the exception, and is dealt with below.
 
 ```
   hand                          board
@@ -48,6 +49,8 @@ One fixed 36-card deck per side, the same for both players — no deckbuilding:
 |---|---|---|---|---|---|
 | 14 | 8 | 7 | 4 | 2 | 1 |
 
+Only four Rook cards, which is what gives castling a price worth thinking about.
+
 A **Wild** moves anything. One copy in thirty-six: a rare universal answer, not a normal
 turn.
 
@@ -57,6 +60,19 @@ Queen — so no game starts stuck and the first turn offers you the whole board.
 leaves you a card richer. The spent card goes face up on your discard; when your deck runs
 out the discard is reshuffled into a new one. The hand caps at **seven**, and at the cap
 the deal simply does not happen.
+
+**Castling costs a Rook card.** It is the one king move that is not only a king move: the
+rook crosses the board too, so it is paid for exactly as the rook move it contains would
+be. Free castling quietly turned the king's exemption — which exists so that no hand can
+lock you out — into the strongest thing you could do with an empty hand. With no Rook card
+and no Wild the board will not offer it, and the hand panel says why.
+
+**The hand shrinks with your army.** The cap is not a constant: it is two plus the number
+of piece kinds you still have, floored at three. Five kinds gives the full seven, three
+gives five, a lone pawn gives three. A card is only worth holding while you still own a
+piece it names, and seven cards against a rook and three pawns is a pile with two useful
+cards in it. **Nothing is ever taken from you** when the cap falls — the deal simply stops
+until you have spent your way back under it.
 
 **Tempo.** A capture draws you an extra card at the end of the turn. Going forward widens
 the hand that has to sustain going forward.
@@ -72,11 +88,17 @@ Pick **Sacrifice**, choose the three cards to burn, then move. Dead cards count 
 which is often the point; the king is excluded, since he was free anyway.
 
 **A card cannot outlive its piece.** Trade off both knights and any Knight cards you are
-holding are swapped for fresh ones at the start of your next turn — they go back to the
-discard, so promoting a pawn to a knight makes them meaningful again. Being unable to move
-the bishop you *have* is a position to solve; holding a card for a bishop that no longer
-exists is just a smaller hand. Only extinction triggers this, never a piece that is merely
-blocked.
+holding are swapped for fresh ones — they go back to the discard, so promoting a pawn to a
+knight makes them meaningful again. Being unable to move the bishop you *have* is a
+position to solve; holding a card for a bishop that no longer exists is just a smaller
+hand. Only extinction triggers this, never a piece that is merely blocked.
+
+The swap happens **the moment the piece dies**, on both sides, rather than when your own
+turn next opens. That timing is the fix for a reported bug where a card appeared to arrive
+and then change under you: the capture bonus dealt you a Knight card the instant you traded
+your last knight, and taking *your* last knight left the dead cards sitting in your hand
+until your turn came round. Both are closed — by the time a hand reaches anyone, it holds
+no card for a piece that is not on the board.
 
 **Nobody gets stuck.** Three safety nets, in the order they fire:
 
@@ -87,7 +109,8 @@ blocked.
   a fresh opening hand of one card per piece kind. You still owe a move.
 - **Emergency move** — for the one case cycling must not answer: **in check**, with a hand
   that can do nothing about it. A red Emergency card appears; it moves any piece you like,
-  and costs one card taken at random from the hand you could not use anyway.
+  and costs one card taken at random from the hand you could not use anyway. It will also
+  pay for a castle, since it reaches everything.
 
 So the absence of a card never mates you. Mate only ever comes out of the position.
 
@@ -173,23 +196,47 @@ On a host with an ephemeral filesystem — a plain container, including Railway 
 volume attached — the archive survives restarts but not redeploys. Point `GAMES_DIR` at a
 mounted volume to make it durable.
 
-## Profiles
+## Accounts and profiles
 
-Deliberately thin, and worth being plain about what they are. There is **no account and
-nothing to log into**: the token your browser already keeps in order to reclaim your seat
-after a refresh *is* the identity, so a profile appears by itself the first time you finish
-a game.
+**A game record belongs to an account.** Register with a username and a password, and your
+finished games follow you — to another browser, to your phone, through clearing your site
+data. The first version of this hung the record on the browser token that reclaims your
+seat after a refresh, which is storage rather than an identity: it could not survive a
+cleared browser and could not follow anyone to a second device.
 
-It holds a name, a win/draw/loss tally, and the games behind it — every one of which opens
-in a replay you can step through. It shows up under the join box on the home screen.
+**Playing does not need one.** A guest can create a room, take a seat, play a full game
+and have it archived like any other. What a guest does not get is the record, because
+there is nothing to record it against — and inventing a per-browser identity to hang it on
+is the thing that did not work. The panel on the home screen says exactly that rather than
+implying the game is behind a sign-up.
 
-The token never becomes the profile id. That token is a bearer credential — hand it out in
-a URL and you have handed out the seats it can reclaim — so the id is a hash of it: stable,
-derivable without a lookup table, and useless to anyone who reads it off a link. Profiles
-live under `PROFILES_DIR` (default `data/profiles`), one JSON file each.
+Your profile holds a name, a win/draw/loss tally, and the games behind it — every one of
+which opens in a replay you can step through.
 
-The limits follow from having no account, and they are real: clear the browser's storage,
-or play from another device, and that is a different player.
+### How it is kept
+
+Passwords are hashed with **scrypt** and a per-account salt, compared in constant time,
+and a sign-in attempt for a username that does not exist still pays for a hash — so the
+reply cannot be used to work out who is registered. Sign-in is rate limited per socket.
+
+A session is a signed token, `<accountId>.<issuedAt>.<HMAC-SHA256>`, carrying no
+server-side state: nothing to store, nothing to look up, and a restart does not sign
+everyone out. The trade is that an individual session cannot be revoked — rotating
+`SESSION_SECRET` revokes all of them at once, which for a chess app is the right trade.
+Sessions last a month.
+
+The session and the seat token stay separate on purpose: **signing out must not stand you
+up from the board you are sitting at**, and reclaiming a seat must not require being
+signed in.
+
+| variable | what it sets |
+|---|---|
+| `ACCOUNTS_DIR` | where accounts live (default `data/accounts`) |
+| `SESSION_SECRET` | the key that signs sessions — set this in production |
+
+Without `SESSION_SECRET` a key is generated and written beside the accounts, which is fine
+locally and survives a restart; on a host with an ephemeral filesystem, set it, or every
+redeploy signs everyone out.
 
 ## Running it
 
@@ -276,6 +323,7 @@ sending everything to everyone and asking the client to hide it.
   it, or just move a piece and the matching card is spent for you — the exact card before a
   Wild, and a Wild before the emergency move. Pieces you cannot reach this turn are dimmed.
 - To **sacrifice**, press the button, click three cards to burn, then move any piece.
+- Castling needs a Rook card (or a Wild); without one the board will not offer it.
 - **←** / **→** step back and forward through the game, **Home** / **End** jump to either
   end, **Esc** returns to the live position. Clicking a move in the history does the same.
 - **F** — flip the board. **M** — mute. **E** — visual effects on/off.

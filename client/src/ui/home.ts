@@ -1,8 +1,10 @@
-import { createRoom, getName, setName } from '../net/socket';
+import { createRoom, getName, setName, resumeSession } from '../net/socket';
 import { sfx, unlockAudio } from '../audio/sfx';
 import { toast } from './widgets';
 import { Slider, Segmented, toggle } from './controls';
 import { mountProfile } from './profile';
+import { AuthPanel } from './auth';
+import type { Account } from '../types';
 
 const TIMER_STOPS = [
   { value: 10, label: '10' }, { value: 15, label: '15' }, { value: 20, label: '20' },
@@ -69,6 +71,7 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
           </div>
         </section>
 
+        <div id="auth-slot"></div>
         <section class="panel edge prof-panel" id="profile" hidden></section>
       </div>
     </div>`;
@@ -126,20 +129,47 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
   });
   root.querySelector('#timer-slot')!.appendChild(timer.el);
 
-  // Your own record and the games on it. Fetched rather than waited for: a profile that
-  // will not load must never be the reason a room cannot be created.
-  const reloadProfile = mountProfile(root.querySelector<HTMLElement>('#profile')!);
+  // Your own record and the games on it. Fetched rather than waited for: neither a
+  // profile nor a session that will not load may be the reason a room cannot be created.
+  const showProfile = mountProfile(root.querySelector<HTMLElement>('#profile')!);
+
+  const nameField = root.querySelector<HTMLElement>('.tfield')!;
+
+  /**
+   * Signing in takes over the name field.
+   *
+   * A signed-in player is named by their account -- that is the name the server will put
+   * on the game record either way -- so leaving an editable name box beside it would be
+   * offering a choice that does not exist.
+   */
+  const paintAccount = (account: Account | null): void => {
+    nameField.hidden = account != null;
+    if (account) nm.value = account.username;
+  };
+
+  const auth = new AuthPanel({
+    onChange: account => {
+      paintAccount(account);
+      // A fresh account has no games yet, so this clears the panel rather than leaving
+      // the previous player's list on screen.
+      showProfile(account ? undefined : null);
+    },
+  });
+  root.querySelector<HTMLElement>('#auth-slot')!.appendChild(auth.el);
+
+  // Resume in one round trip, so a signed-in player never sees the signed-out panel flash
+  // past on the way in.
+  void resumeSession().then(({ account, profile }) => {
+    auth.setAccount(account);
+    paintAccount(account);
+    showProfile(profile);
+  }).catch(() => {});
 
   const saveName = (): string => {
     const v = nm.value.trim() || 'Player';
     setName(v);
     return v;
   };
-
-  // A rename does not reach the server until the next join, so the panel keeps showing
-  // the name the profile was last saved under until then. Reloading on blur is what makes
-  // that read as a lag rather than as the field having been ignored.
-  nm.addEventListener('blur', () => { saveName(); reloadProfile(); });
 
   root.querySelector('#create')!.addEventListener('click', async () => {
     unlockAudio();

@@ -50,6 +50,15 @@ export class Board {
    * which is every board in the team game.
    */
   private allowedTypes: Set<string> | null = null;
+  /**
+   * Whether castling may be offered.
+   *
+   * Castling is a king move, so `allowedTypes` waves it through -- but in Chess Cards the
+   * rook travels too and it costs a Rook card. Without this the board would light up the
+   * castling square and the server would refuse the move when it got there, which reads
+   * as a bug rather than as a rule.
+   */
+  private castleOk = true;
 
   private selected: string | null = null;
   private legalTargets = new Set<string>();
@@ -250,6 +259,17 @@ export class Board {
     this.renderMarkers();
   }
 
+  /** Cards mode: whether the hand can pay the Rook card a castle costs. */
+  setCastlingAllowed(on: boolean): void {
+    if (this.castleOk === on) return;
+    this.castleOk = on;
+    if (this.selected) {
+      const was = this.selected;
+      this.clearSelection();
+      this.selectSquare(was);
+    }
+  }
+
   /** Whether the piece on a square is one this player may move at this moment. */
   private canMove(square: string): boolean {
     const piece = this.pieces.get(square);
@@ -423,8 +443,11 @@ export class Board {
     this.selected = square;
     this.legalTargets.clear();
     const moves = this.chess.moves({ square: square as never, verbose: true }) as unknown as
-      Array<{ to: string }>;
-    for (const m of moves) this.legalTargets.add(m.to);
+      Array<{ to: string; flags: string }>;
+    for (const m of moves) {
+      if (!this.castleOk && (m.flags.includes('k') || m.flags.includes('q'))) continue;
+      this.legalTargets.add(m.to);
+    }
     this.renderMarkers();
   }
 

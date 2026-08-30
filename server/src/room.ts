@@ -4,6 +4,7 @@ import {
   createCards, cardsPublic, drawPerTurnFor, drawCards, drawBonus, refreshEmergency,
   resolveSpend, resolveSacrifice, commitSpend, snapshotCards, movableTypes, cardCovers,
   FREE_PIECE, extinctTypes, replaceExtinct, cycleForPlayable, mulligan as mulliganCards,
+  aliveTypeCount, handCapFor, canCastle,
   type CardsState, type Spend,
 } from './cards.js';
 import type {
@@ -16,6 +17,14 @@ export interface InternalSeat {
   id: number;
   name: string | null;
   token: string | null;
+  /**
+   * The account this seat is played by, if anyone signed in is in it.
+   *
+   * Kept apart from `token`, which is the browser's seat-reclaim credential and says
+   * nothing about who is holding it. This is what a finished game is credited to, so a
+   * guest simply carries null and is not recorded.
+   */
+  accountId: string | null;
   kind: SeatKind;
   connected: boolean;
   stats: SeatStats;
@@ -104,7 +113,7 @@ function makeTeam(color: Color, size: number): Team {
     color,
     cursor: 0,
     seats: Array.from({ length: size }, (_, id) => ({
-      id, name: null, token: null, kind: 'human' as SeatKind,
+      id, name: null, token: null, accountId: null, kind: 'human' as SeatKind,
       connected: false, stats: emptyStats(),
     })),
   };
@@ -239,10 +248,49 @@ const FAIL: ApplyResult = {
  * board is touched. Every candidate sharing a from/to square is the same piece, so the
  * promotion choice does not change the answer.
  */
-function peekMove(chess: Chess, m: MovePayload): { piece: string } | null {
+function peekMove(chess: Chess, m: MovePayload):
+    { piece: string; castling: boolean } | null {
   const moves = chess.moves({ verbose: true }) as unknown as
-    Array<{ from: string; to: string; piece: string }>;
-  return moves.find(x => x.from === m.from && x.to === m.to) ?? null;
+    Array<{ from: string; to: string; piece: string; flags: string }>;
+  const found = moves.find(x => x.from === m.from && x.to === m.to);
+  if (!found) return null;
+  return {
+    piece: found.piece,
+    castling: found.flags.includes('k') || found.flags.includes('q'),
+  };
+}
+
+/** The hand cap for one side right now, which falls as its army comes off the board. */
+export function handCapOf(room: Room, color: Color): number {
+  return handCapFor(aliveTypeCount(room.chess, color));
+}
+
+/**
+ * Swap every card naming a piece that no longer exists, on both sides, right now.
+ *
+ * This runs after each ply rather than only when a turn opens, and that timing is the
+ * whole point of it. Two things used to make a card visibly arrive and then change under
+ * the player:
+ *
+ *  - the capture bonus deals a card the instant a capture lands, and it was dealt without
+ *    the extinction filter -- so trading off your last knight and drawing a Knight card
+ *    for it showed you the card, then swapped it at the start of your next turn;
+ *  - taking a player's last knight makes their Knight cards dead immediately, but they
+ *    were only swapped when that player's own turn opened, so they sat and watched a card
+ *    they could no longer use until it changed in front of them.
+ *
+ * Pruning both hands at the end of every ply closes both: by the time a hand is next
+ * pushed to anyone, it no longer holds a card for a piece that is not on the board.
+ */
+export function pruneExtinct(room: Room): void {
+  if (!room.cards) return;
+  for (const color of ['white', 'black'] as Color[]) {
+    const side = room.cards[color];
+    const replaced = replaceExtinct(side, extinctTypes(room.chess, color));
+    // appended, not assigned: the note has to survive from the moment the swap happens
+    // until the player is next on turn and can actually be shown it
+    if (replaced.length > 0) side.lastReplaced.push(...replaced);
+  }
 }
 
 /** Validate and apply one ply, advancing only the moving team's cursor. */
@@ -268,9 +316,9 @@ export function applyMove(room: Room, m: MovePayload,
     // at him buys nothing and would burn three cards for it. Dropping the sacrifice
     // rather than refusing the move is the kinder of the two -- the move was legal and
     // free all along, and the cards simply stay in the hand.
-    spend = m.sacrificeIds != null && peek.piece !== FREE_PIECE
+    spend = m.sacrificeIds != null && (peek.piece !== FREE_PIECE || peek.castling)
       ? resolveSacrifice(room.cards[mover], m.sacrificeIds, room.history.length)
-      : resolveSpend(room.cards[mover], peek.piece, m.cardId);
+      : resolveSpend(room.cards[mover], peek.piece, m.cardId, peek.castling);
     if (!spend) return FAIL;
   }
 
@@ -334,8 +382,18 @@ export function applyMove(room: Room, m: MovePayload,
   // Pay for the move, then take the card a capture earns. Tempo is the whole reason to
   // go forward: an attack that lands widens the hand that has to sustain it.
   if (room.cards && spend) {
-    commitSpend(room.cards[mover], spend);
-    if (capturedValue > 0) drawBonus(room.cards[mover]);
+    const side = room.cards[mover];
+    // The notes from the turn just played are spent along with it: whatever was swapped
+    // or cycled has been shown, and anything that happens from here belongs to the next
+    // turn's explanation rather than this one's.
+    side.lastReplaced = [];
+    side.lastCycled = [];
+    commitSpend(side, spend);
+    if (capturedValue > 0) drawBonus(side, handCapOf(room, mover));
+    // A capture can end a piece type -- the mover's, by promoting away their last pawn,
+    // or the opponent's, by taking their last knight -- so both hands are pruned against
+    // the board as it now stands, before either player is shown a card that is already dead.
+    pruneExtinct(room);
   }
 
   if (room.chess.isGameOver()) {
@@ -454,9 +512,16 @@ export function beginCardTurn(room: Room): void {
   // The first turn is the exception: the opening hand was the deal for it. Dealing again
   // here would put both players on a full seven before either had moved, and the opening
   // spread -- one card for each piece kind -- would never actually be a hand anyone saw.
+  //
+  // The cap falls as this side's army does, and nothing is confiscated when it falls: the
+  // deal simply stops until the hand has been spent back down under it.
+  const cap = handCapOf(room, turn);
   side.openedTurns++;
-  if (side.openedTurns > 1) drawCards(side, drawPerTurnFor(room.history.length));
-  side.lastReplaced = replaceExtinct(side, extinctTypes(room.chess, turn));
+  if (side.openedTurns > 1) drawCards(side, drawPerTurnFor(room.history.length), cap);
+  // The prune after each ply does the real work; this catches the opening deal and any
+  // path that reaches a turn without one. Appended, so a swap explained from the previous
+  // ply is still on the note the player is about to read.
+  side.lastReplaced.push(...replaceExtinct(side, extinctTypes(room.chess, turn)));
 
   // A dead hand with the king safe is a draw problem, and gets a draw answer: cycle until
   // something can move. Under check it is not -- the position is asking a question that
@@ -485,6 +550,12 @@ export function useMulligan(room: Room, color: Color): boolean {
  * hand could have paid for, or the timeout would play a move the player was never
  * allowed to make.
  */
+export function canCastleNow(room: Room): boolean {
+  if (!room.cards) return true;
+  const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
+  return canCastle(room.cards[turn]);
+}
+
 export function affordableTypes(room: Room): Set<string> | null {
   if (!room.cards) return null;
   const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
@@ -504,7 +575,11 @@ export function affordableTypes(room: Room): Set<string> | null {
 
 /** Play a move for a seat that ran out of time: a uniformly random legal move. */
 export function playForcedMove(room: Room, style: MoveStyle = 'random'): ApplyResult | null {
-  const mv = pickMove(room.chess, style, affordableTypes(room) ?? undefined);
+  // Castling costs a Rook card, so the clock and the bots have to be told about it too --
+  // otherwise a timeout could pick a castle the hand cannot pay for, `applyMove` would
+  // refuse it, and the turn would hang on a move nobody could make.
+  const mv = pickMove(room.chess, style, affordableTypes(room) ?? undefined,
+    { allowCastle: canCastleNow(room) });
   if (!mv) return null;
   return applyMove(room, mv, { auto: style === 'random' });
 }
@@ -633,7 +708,10 @@ export function serialize(room: Room): RoomState {
       ...room.pendingTakeback,
       remainingMs: Math.max(0, room.pendingTakeback.deadline - Date.now()),
     },
-    cards: room.cards ? cardsPublic(room.cards, room.history.length) : null,
+    cards: room.cards
+      ? cardsPublic(room.cards, room.history.length,
+          { white: handCapOf(room, 'white'), black: handCapOf(room, 'black') })
+      : null,
     pendingDraw: room.pendingDraw && {
       ...room.pendingDraw,
       remainingMs: Math.max(0, room.pendingDraw.deadline - Date.now()),

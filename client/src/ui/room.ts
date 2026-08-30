@@ -367,8 +367,12 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     if (isCardsMode(s)) {
       cardHand.render(s.hand, room.cards, s.you?.seat?.color ?? null);
       applyReach();
+      // Castling costs a Rook card here, so the board is told whether one can be paid --
+      // otherwise it would offer a castle the server is about to refuse.
+      board.setCastlingAllowed(s.hand?.canCastle !== false);
     } else {
       board.setAllowedTypes(null);
+      board.setCastlingAllowed(true);
     }
 
     renderTray(trayEl, shown.fen);

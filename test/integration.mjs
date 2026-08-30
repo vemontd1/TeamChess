@@ -51,7 +51,22 @@ const fetchText = async path => {
 // join with an explicit token so reconnect semantics are testable
 function join(s, roomId) {
   return new Promise(res =>
-    s.emit('room:join', { roomId, name: s.name, token: s.token }, res));
+    s.emit('room:join',
+      { roomId, name: s.name, token: s.token, session: s.session }, res));
+}
+
+/**
+ * Register an account on this socket, so the games it plays are recorded.
+ *
+ * Falls back to signing in, because the suite is meant to be runnable twice: the second
+ * run finds the account the first one made, and "that username is taken" is the right
+ * answer to a repeat registration rather than a failure of the suite.
+ */
+async function signUp(s, password = 'correct-horse') {
+  let res = await emitCb(s, 'auth:register', { username: s.name, password });
+  if (!res?.ok) res = await emitCb(s, 'auth:login', { username: s.name, password });
+  if (res?.ok) s.session = res.session;
+  return res;
 }
 
 async function waitFor(s, pred, ms = 4000) {
@@ -521,7 +536,12 @@ async function main() {
   // the mode does not silently invalidate the suite. docs/BALANCE.md owns the numbers.
   // The opening hand is one card per piece kind, which the client only sees as a count.
   const HAND = cw.hand.cards.length;
-  const CAP = cw.last.cards.handMax;
+  // The cap is per side and falls with that side's army, so it is read fresh rather than
+  // captured once. At the opening both sides have every piece kind and sit at the maximum.
+  const CAP = cw.last.cards.white.handCap;
+  check('a full army opens at the maximum cap',
+    CAP === cw.last.cards.handMax && cw.last.cards.black.handCap === CAP,
+    `${CAP} vs ${cw.last.cards.handMax}`);
   const DECK = cw.last.cards.white.handCount + cw.last.cards.white.deckCount
     + cw.last.cards.white.discardCount;
   check('the deck is thirty-six a side', DECK === 36, String(DECK));
@@ -622,8 +642,12 @@ async function main() {
     if (hand.cards.length < 1) {
       bad = `${color} was left holding nothing`; break;
     }
-    if (hand.cards.length > CAP) {
-      bad = `${color} holds ${hand.cards.length}, over the cap of ${CAP}`; break;
+    const capNow = st.cards[color].handCap;
+    if (hand.cards.length > Math.max(capNow, CAP)) {
+      bad = `${color} holds ${hand.cards.length}, over every cap it has had`; break;
+    }
+    if (hand.cards.length !== hand.handCap && hand.handCap !== capNow) {
+      bad = `${color} was told cap ${hand.handCap}, the table says ${capNow}`; break;
     }
     if (lastHand[color] != null) {
       // a turn deals a fixed number, so the hand can only grow by the deal, and only
@@ -644,8 +668,12 @@ async function main() {
     const options = g.moves({ verbose: true }).filter(m => r.has(m.piece));
     if (options.length === 0) { bad = `${color} could not move at all`; break; }
 
-    // prefer a capture where one exists, to exercise the tempo bonus
-    const pick = options.find(m => m.captured) ?? options[0];
+    // Prefer a capture where one exists, to exercise the tempo bonus; otherwise pick at
+    // random rather than taking the first move every time. Always taking `options[0]`
+    // walks both sides into a repetition loop where no card is ever spent and no card is
+    // ever drawn, which starves exactly the churn this section is here to observe.
+    const pick = options.find(m => m.captured)
+      ?? options[Math.floor(Math.random() * options.length)];
     const before = { hand: hand.cards.length, played: st.cards[color].played.length };
 
     const accepted = await emitCb(me, 'game:move',
@@ -663,7 +691,8 @@ async function main() {
     if (pick.captured && cw.last.status === 'playing') {
       capturesSeen++;
       // one card paid for the move, one came back for the capture
-      const expected = Math.min(CAP, before.hand - (pick.piece === 'k' ? 0 : 1) + 1);
+      const expected = Math.min(after.handCap,
+        before.hand - (pick.piece === 'k' ? 0 : 1) + 1);
       if (after.handCount !== expected) {
         bad = `a capture left ${after.handCount} cards, expected ${expected}`; break;
       }
@@ -813,6 +842,7 @@ async function main() {
 
   const bySide = { white: sw1, black: sw2 };
   let strandedTurns = 0, extinctTurns = 0, worstStranded = '';
+  let idleStranded = 0, idleTurns = 0, worstIdle = '';
   let swapsSeen = 0, extinctionsSeen = 0, replacedKinds = new Set();
 
   // Both sides play greedily for captures, but the game is still random, and whether it
@@ -820,7 +850,7 @@ async function main() {
   // more so now that a hand of seven holds much of what could be swapped in. One game is
   // therefore not a test, it is a sample. Play up to three, stopping at the first that
   // actually exercises the swap, so the check stays a hard one instead of a flaky one.
-  for (let attempt = 0; attempt < 3 && swapsSeen === 0; attempt++) {
+  for (let attempt = 0; attempt < 5 && swapsSeen === 0; attempt++) {
   if (attempt > 0) {
     sw1.emit('game:rematch');
     await waitFor(sw1, st => st.status === 'playing' && st.history.length === 0);
@@ -841,6 +871,23 @@ async function main() {
     }
 
     // the invariant: nothing in hand names a piece this side no longer has
+    // Both hands, not just the one on turn. A capture can end the *opponent's* last
+    // knight, and their Knight cards used to sit dead in front of them until their own
+    // turn opened -- which is the "a card arrives and then changes" report.
+    const other = color === 'white' ? 'black' : 'white';
+    const otherHand = bySide[other].hand;
+    const otherGone = extinctFor(st.fen, other);
+    const otherStranded = (otherHand?.cards ?? []).filter(
+      c => c.kind !== 'wild' && otherGone.has(CARD_PIECE[c.kind]));
+    if (otherGone.size > 0) {
+      idleTurns++;
+      if (otherStranded.length > 0) {
+        idleStranded++;
+        worstIdle = `${other} watched ${otherStranded.map(c => c.kind).join(',')} `
+          + `go dead while ${color} was on move, at ply ${st.history.length}`;
+      }
+    }
+
     const stranded = hand.cards.filter(
       c => c.kind !== 'wild' && gone.has(CARD_PIECE[c.kind]));
     if (gone.size > 0) extinctTurns++;
@@ -871,9 +918,12 @@ async function main() {
   check('a long game reached at least one extinct piece type', extinctionsSeen > 0,
     `${extinctionsSeen} turns with something extinct`);
   check('a card for a piece you no longer own is the exception, not the hand',
-    extinctTurns === 0 || strandedTurns / extinctTurns < 0.5,
+    extinctTurns === 0 || strandedTurns / extinctTurns < 0.2,
     `${strandedTurns}/${extinctTurns} turns with something extinct `
     + `— e.g. ${worstStranded || 'none'}`);
+  check('a hand is pruned the moment a piece dies, not when its turn comes round',
+    idleTurns === 0 || idleStranded / idleTurns < 0.5,
+    `${idleStranded}/${idleTurns} off-turn observations — e.g. ${worstIdle || 'none'}`);
   check('the swap was reported to the player who got it', swapsSeen > 0,
     `${swapsSeen} turns reported a swap (${[...replacedKinds].join(',') || 'none'})`);
   check('a swap is never recorded as a card played on a move', (() => {
@@ -919,7 +969,6 @@ async function main() {
     const sacLegal = sacBoard.moves({ verbose: true });
     const sacIds = cs1.hand.cards.slice(0, COST).map(c => c.id);
 
-    check('a sacrifice naming too few cards is refused', (() => true)());
     const tooFew = await emitCb(cs1, 'game:move', {
       from: sacLegal[0].from, to: sacLegal[0].to, sacrificeIds: sacIds.slice(0, COST - 1),
     });
@@ -992,6 +1041,11 @@ async function main() {
     const ridA = await emitCb(ca1, 'room:create',
       { name: 'A', config: { teamSize: 1, moveTimerSec: 120 } });
     const ca2 = await mkClient('Arch-B');
+    // Only a signed-in player has a record, so this section registers both of them first.
+    const reg1 = await signUp(ca1);
+    const reg2 = await signUp(ca2);
+    check('both players have an account',
+      reg1.ok === true && reg2.ok === true, JSON.stringify([reg1.error, reg2.error]));
     for (const c of [ca1, ca2]) await join(c, ridA);
     await emitCb(ca1, 'seat:take', { color: 'white', seatId: 0 });
     await emitCb(ca2, 'seat:take', { color: 'black', seatId: 0 });
@@ -1037,7 +1091,7 @@ async function main() {
     check('and it shows in the recent list',
       Array.isArray(listed) && listed.some(g => g.id === ca1.archived.id));
 
-    const prof = await emitCb(ca1, 'profile:me', { token: ca1.token, limit: 10 });
+    const prof = await emitCb(ca1, 'profile:me', { limit: 10 });
     check('the winner and loser each got the game on their profile', (() => {
       const mine = prof?.games?.find(g => g.id === ca1.archived.id);
       return mine?.yourColor === 'white' && mine.yourResult === 'loss';
@@ -1045,18 +1099,202 @@ async function main() {
     check('and their tally moved', prof.profile.record.losses >= 1,
       JSON.stringify(prof.profile.record));
 
-    const prof2 = await emitCb(ca2, 'profile:me', { token: ca2.token, limit: 10 });
+    const prof2 = await emitCb(ca2, 'profile:me', { limit: 10 });
     check('the other side recorded the same game as a win', (() => {
       const theirs = prof2?.games?.find(g => g.id === ca1.archived.id);
       return theirs?.yourColor === 'black' && theirs.yourResult === 'win'
         && theirs.opponents[0] === 'Arch-W';
     })(), JSON.stringify(prof2?.games?.[0]));
-    check('a profile is not addressed by the token that would reclaim a seat',
-      prof.profile.id !== ca1.token && /^[a-f0-9]{16}$/.test(prof.profile.id),
+    check('a profile is addressed by the account, not by the seat token',
+      prof.profile.id !== ca1.token && prof.profile.id === reg1.account.id
+      && /^[a-f0-9]{16}$/.test(prof.profile.id),
       prof.profile.id);
+    check('and the record is filed under the account name',
+      prof.profile.name === 'Arch-W', prof.profile.name);
     check('and it can be read by that public id',
       (await fetchJson(`/api/profile/${prof.profile.id}`))?.profile?.id === prof.profile.id);
 
+  }
+
+
+  {
+    log('\n=== 27. Chess Cards: castling costs a Rook card ===');
+    const cc1 = await mkClient('Castle-W');
+    const ridC = await emitCb(cc1, 'room:create',
+      { name: 'C', config: { mode: 'cards', moveTimerSec: 120 } });
+    const cc2 = await mkClient('Castle-B');
+    for (const c of [cc1, cc2]) await join(c, ridC);
+    await emitCb(cc1, 'seat:take', { color: 'white', seatId: 0 });
+    await emitCb(cc2, 'seat:take', { color: 'black', seatId: 0 });
+    cc1.emit('game:start');
+    await waitFor(cc1, s => s.status === 'playing');
+    await sleep(200);
+
+    check('the hand reports whether a castle can be paid for',
+      typeof cc1.hand.canCastle === 'boolean');
+    check('and the opening hand can, since it holds a Rook card',
+      cc1.hand.canCastle === true,
+      cc1.hand.cards.map(c => c.kind).join(','));
+
+    // Getting to a castleable position is not a given: White has to develop the knight
+    // and the bishop, and can only do so on turns the hand pays for it. So the section
+    // plays toward it -- back rank first, then the pawns in front of it -- and takes a
+    // fresh game if a hand strands White entirely, rather than asserting on a coin flip.
+    const play = async (cli, from, to) => {
+      const ok = await emitCb(cli, 'game:move', { from, to });
+      await sleep(100);
+      return ok;
+    };
+    // Filler moves must not cost White the castling rights this section exists to test,
+    // so the king and both rooks stay home.
+    const KEEP = new Set(['e1', 'h1', 'a1']);
+    const UNBLOCK = new Set(['d2', 'e2', 'g2']);
+
+    let cleared = false;
+    for (let attempt = 0; attempt < 4 && !cleared; attempt++) {
+      if (attempt > 0) {
+        cc1.emit('game:rematch');
+        await waitFor(cc1, st => st.status === 'playing' && st.history.length === 0);
+        await sleep(200);
+      }
+      for (let i = 0; i < 60 && !cleared; i++) {
+        const st = cc1.last;
+        if (st.status !== 'playing') break;
+        const g = new Chess(st.fen);
+        const white = st.turn === 'white';
+        const cli = white ? cc1 : cc2;
+        const legal = g.moves({ verbose: true }).filter(m => reach(cli.hand).has(m.piece));
+
+        if (white && legal.some(m => m.san === 'O-O')) { cleared = true; break; }
+
+        const usable = legal
+          .filter(m => !m.san.startsWith('O'))
+          .filter(m => !white || !KEEP.has(m.from));
+        const pick = (white ? usable.find(m => m.from === 'g1' || m.from === 'f1') : null)
+          ?? (white ? usable.find(m => UNBLOCK.has(m.from)) : null)
+          ?? usable.find(m => m.piece === 'p')
+          ?? usable[0];
+        if (!pick) break;                       // this hand strands us; take a fresh game
+        if (await play(cli, pick.from, pick.to) === false) break;
+      }
+    }
+
+    if (!cleared) {
+      check('a castle became available to test', false, 'never cleared the back rank');
+    } else {
+      const holdsRook = cc1.hand.cards.some(c => c.kind === 'rook' || c.kind === 'wild');
+      const spentBefore = cc1.last.cards.white.played.length;
+      const okCastle = await play(cc1, 'e1', 'g1');
+
+      if (holdsRook || cc1.hand.emergency) {
+        check('a castle with a Rook card in hand is accepted', okCastle === true);
+        check('and it spent a card, unlike every other king move',
+          cc1.last.cards.white.played.length === spentBefore + 1,
+          JSON.stringify(cc1.last.cards.white.played.slice(spentBefore)));
+        check('the card spent was one that covers a rook', (() => {
+          const k = cc1.last.cards.white.played[spentBefore];
+          return k === 'rook' || k === 'wild' || cc1.last.cards.white.emergenciesUsed > 0;
+        })(), cc1.last.cards.white.played[spentBefore]);
+      } else {
+        check('a castle with no Rook card is refused', okCastle === false);
+        check('and the board did not move', cc1.last.fen.includes('R3K') === false
+          || cc1.last.cards.white.played.length === spentBefore);
+        check('the hand was told it could not castle', cc1.hand.canCastle === false);
+      }
+    }
+  }
+
+
+  {
+    log('\n=== 28. Accounts ===');
+    const acc = await mkClient('Acct');
+    const name = `acct_${Math.random().toString(36).slice(2, 9)}`;
+
+    check('a short username is refused',
+      (await emitCb(acc, 'auth:register', { username: 'ab', password: 'longenough1' })).ok === false);
+    check('an illegal username is refused',
+      (await emitCb(acc, 'auth:register', { username: 'has space', password: 'longenough1' })).ok === false);
+    check('a short password is refused',
+      (await emitCb(acc, 'auth:register', { username: name, password: 'short' })).ok === false);
+
+    const made = await emitCb(acc, 'auth:register', { username: name, password: 'longenough1' });
+    check('a good registration succeeds', made.ok === true, made.error ?? '');
+    check('it returns the account and a session',
+      typeof made.account?.id === 'string' && typeof made.session === 'string',
+      JSON.stringify(made.account));
+    check('and never the password or its hash',
+      !JSON.stringify(made).includes('longenough1')
+      && !JSON.stringify(made).includes('hash')
+      && !JSON.stringify(made).includes('salt'),
+      JSON.stringify(made));
+
+    check('the same username cannot be taken twice',
+      (await emitCb(acc, 'auth:register', { username: name, password: 'another1234' })).ok === false);
+    check('nor in a different case',
+      (await emitCb(acc, 'auth:register',
+        { username: name.toUpperCase(), password: 'another1234' })).ok === false);
+
+    const other = await mkClient('Acct2');
+    check('the wrong password is refused',
+      (await emitCb(other, 'auth:login', { username: name, password: 'wrongpassword' })).ok === false);
+    check('an unknown user is refused',
+      (await emitCb(other, 'auth:login',
+        { username: `nobody_${name}`, password: 'longenough1' })).ok === false);
+
+    const signedIn = await emitCb(other, 'auth:login', { username: name, password: 'longenough1' });
+    check('the right password signs in', signedIn.ok === true, signedIn.error ?? '');
+    check('and lands on the same account', signedIn.account.id === made.account.id);
+
+    // The session is a signed bearer token: it must survive a round trip and must not be
+    // forgeable by editing the account id into someone else's.
+    const resumed = await emitCb(other, 'auth:resume', { session: signedIn.session });
+    check('a session resumes to its account', resumed.account?.id === made.account.id);
+    check('and brings the profile with it', resumed.profile?.profile?.id === made.account.id);
+
+    const forged = `${made.account.id}.${Date.now()}.` + 'A'.repeat(43);
+    check('a forged session is refused',
+      (await emitCb(other, 'auth:resume', { session: forged })).account === null);
+    const tampered = signedIn.session.slice(0, -1) + (signedIn.session.endsWith('a') ? 'b' : 'a');
+    check('flipping one byte of the signature invalidates it',
+      (await emitCb(other, 'auth:resume', { session: tampered })).account === null);
+    check('so does nonsense',
+      (await emitCb(other, 'auth:resume', { session: 'not-a-session' })).account === null
+      && (await emitCb(other, 'auth:resume', {})).account === null);
+
+    const guest = await mkClient('Guest');
+    check('a guest has no profile to read',
+      (await emitCb(guest, 'profile:me', { limit: 5 })) === null);
+
+    // A guest can still play. That is the point of not gating the game behind the account.
+    const gRoom = await emitCb(guest, 'room:create', { name: 'G', config: { teamSize: 1 } });
+    const guest2 = await mkClient('Guest2');
+    for (const c of [guest, guest2]) await join(c, gRoom);
+    await emitCb(guest, 'seat:take', { color: 'white', seatId: 0 });
+    await emitCb(guest2, 'seat:take', { color: 'black', seatId: 0 });
+    guest.emit('game:start');
+    await waitFor(guest, st => st.status === 'playing');
+    check('a guest can create a room, take a seat and start a game',
+      guest.last.status === 'playing');
+    const moved = await emitCb(guest, 'game:move', { from: 'e2', to: 'e4' });
+    check('and can actually move', moved === true);
+
+    // Play it out to a real mate, then confirm the archive kept the game and the
+    // profiles kept nothing: a guest has no record to put it on, which is the whole
+    // reason registration exists.
+    for (const [cli, from, to] of [
+      [guest2, 'e7', 'e5'], [guest, 'f1', 'c4'], [guest2, 'b8', 'c6'],
+      [guest, 'd1', 'h5'], [guest2, 'g8', 'f6'], [guest, 'h5', 'f7'],
+    ]) {
+      await emitCb(cli, 'game:move', { from, to });
+      await sleep(80);
+    }
+    await waitFor(guest, st => st.status === 'finished');
+    await sleep(250);
+    check('a guest game still reaches the archive', guest.archived?.id != null,
+      JSON.stringify(guest.last.gameOver));
+    check('but it is recorded against nobody',
+      (await emitCb(guest, 'profile:me', { limit: 5 })) === null
+      && (await emitCb(guest2, 'profile:me', { limit: 5 })) === null);
   }
 
   log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);

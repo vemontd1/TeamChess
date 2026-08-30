@@ -1,12 +1,31 @@
 import { io, type Socket } from 'socket.io-client';
 import type {
   RoomState, JoinResult, RoomConfig, Color, MovePayload, MoveFx, ChatMessage, MarkView,
-  GameEnded, HandState, ProfileView, ArchivedGame, GameSummary,
+  GameEnded, HandState, ProfileView, ArchivedGame, GameSummary, Account, AuthResult,
 } from '../types';
 import { setState } from '../state/store';
 
 const TOKEN_KEY = 'bl.token';
 const NAME_KEY = 'bl.name';
+const SESSION_KEY = 'bl.session';
+
+/**
+ * The signed session, kept apart from the seat token on purpose.
+ *
+ * The token reclaims a seat after a refresh and says nothing about who is holding it; the
+ * session says who you are. Signing out clears one and leaves the other, so leaving your
+ * account does not also stand you up from the board you are sitting at.
+ */
+export function getSession(): string | null {
+  try { return localStorage.getItem(SESSION_KEY); } catch { return null; }
+}
+
+function setSession(session: string | null): void {
+  try {
+    if (session) localStorage.setItem(SESSION_KEY, session);
+    else localStorage.removeItem(SESSION_KEY);
+  } catch { /* a browser refusing storage is a guest, not an error */ }
+}
 
 export function getToken(): string {
   let t = localStorage.getItem(TOKEN_KEY);
@@ -52,7 +71,52 @@ export function createRoom(name: string, config: Partial<RoomConfig>): Promise<s
 
 export function joinRoom(roomId: string, name: string): Promise<JoinResult> {
   return new Promise(resolve => {
-    sock().emit('room:join', { roomId, name, token: getToken() }, (res: JoinResult) => resolve(res));
+    sock().emit('room:join',
+      { roomId, name, token: getToken(), session: getSession() ?? undefined },
+      (res: JoinResult) => resolve(res));
+  });
+}
+
+// ---- accounts ----
+
+function authCall(event: string, username: string, password: string): Promise<AuthResult> {
+  return new Promise(resolve => {
+    sock().emit(event, { username, password }, (res: AuthResult) => {
+      if (res?.ok && res.session) setSession(res.session);
+      resolve(res ?? { ok: false, error: 'No answer from the server.' });
+    });
+  });
+}
+
+export function registerAccount(username: string, password: string): Promise<AuthResult> {
+  return authCall('auth:register', username, password);
+}
+
+export function loginAccount(username: string, password: string): Promise<AuthResult> {
+  return authCall('auth:login', username, password);
+}
+
+export function logoutAccount(): void {
+  setSession(null);
+  sock().emit('auth:logout');
+}
+
+/**
+ * Resume a stored session, and get the profile back in the same round trip.
+ *
+ * One call rather than two because the home screen needs both before it can decide what
+ * to draw, and two would flash the signed-out panel on every load.
+ */
+export function resumeSession(): Promise<{ account: Account | null; profile: ProfileView | null }> {
+  const session = getSession();
+  if (!session) return Promise.resolve({ account: null, profile: null });
+  return new Promise(resolve => {
+    sock().emit('auth:resume', { session },
+      (res: { account: Account | null; profile: ProfileView | null } | null) => {
+        // a session the server will not honour is a session worth forgetting
+        if (!res?.account) setSession(null);
+        resolve(res ?? { account: null, profile: null });
+      });
   });
 }
 
@@ -94,14 +158,12 @@ export function sendMove(m: MovePayload): Promise<boolean> {
 /**
  * Your own profile and the games on it.
  *
- * The token goes in the payload because the home screen asks for this before it has
- * joined any room, so the socket has no token of its own to read yet. It is this
- * browser's own secret in both directions.
+ * Answered from the socket's signed-in account, so there is no id to pass and none to
+ * guess. A guest gets null, which is the honest answer: nothing is being kept for them.
  */
 export function myProfile(limit = 25): Promise<ProfileView | null> {
   return new Promise(resolve => {
-    sock().emit('profile:me', { token: getToken(), limit },
-      (res: ProfileView | null) => resolve(res));
+    sock().emit('profile:me', { limit }, (res: ProfileView | null) => resolve(res));
   });
 }
 

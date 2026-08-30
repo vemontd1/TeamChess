@@ -38,8 +38,25 @@ export const FREE_PIECE = 'k';
  * seven cards is still only about three distinct kinds. `docs/BALANCE.md` has the table.
  */
 export const TUNING = {
-  /** Section 10's card lock: at seven, the draw simply does not happen. */
+  /** Section 10's card lock: at the cap, the deal simply does not happen. */
   handMax: 7,
+  /**
+   * The hand cap scales with how much army you have left.
+   *
+   * A card is only worth holding if you still own a piece it names, so the number worth
+   * holding falls as the board empties. Seven cards against a lone rook and three pawns
+   * is not a hand, it is a pile with two useful cards in it -- the extinction swap keeps
+   * feeding it live cards, and they are live for a smaller and smaller board.
+   *
+   * The cap is `handPerType` plus the number of piece kinds you still have, floored at
+   * `handMin`: five kinds gives the full seven, three gives five, a lone pawn gives three.
+   *
+   * Nothing is ever confiscated when the cap falls. The deal simply stops until the hand
+   * has been spent back down under it, so a shrinking army costs you draws rather than
+   * cards you were counting on.
+   */
+  handMin: 3,
+  handPerType: 2,
   /**
    * The opening hand: one card for each piece kind.
    *
@@ -206,9 +223,9 @@ function drawOne(side: CardSide): Card | null {
  * come out of one card richer -- until the cap, where section 10's card lock bites and
  * holding on starts costing draws.
  */
-export function drawCards(side: CardSide, n: number): number {
+export function drawCards(side: CardSide, n: number, cap = TUNING.handMax): number {
   let drawn = 0;
-  for (let i = 0; i < n && side.hand.length < TUNING.handMax; i++) {
+  for (let i = 0; i < n && side.hand.length < cap; i++) {
     const c = drawOne(side);
     if (!c) break;
     side.hand.push(c);
@@ -218,8 +235,8 @@ export function drawCards(side: CardSide, n: number): number {
 }
 
 /** The capture bonus: one extra card, still bounded by the hand cap. */
-export function drawBonus(side: CardSide): number {
-  if (side.hand.length >= TUNING.handMax) return 0;
+export function drawBonus(side: CardSide, cap = TUNING.handMax): number {
+  if (side.hand.length >= cap) return 0;
   const c = drawOne(side);
   if (!c) return 0;
   side.hand.push(c);
@@ -297,6 +314,17 @@ export function extinctTypes(chess: Chess, color: Color): Set<string> {
   const out = new Set<string>();
   for (const type of ['p', 'n', 'b', 'r', 'q']) if (!alive.has(type)) out.add(type);
   return out;
+}
+
+/** Piece kinds this side still has on the board. The king is not one of them. */
+export function aliveTypeCount(chess: Chess, color: Color): number {
+  return 5 - extinctTypes(chess, color).size;
+}
+
+/** How many cards this side may hold, given how much of its army is left. */
+export function handCapFor(typesAlive: number): number {
+  return Math.max(TUNING.handMin,
+    Math.min(TUNING.handMax, typesAlive + TUNING.handPerType));
 }
 
 /** A Wild only dies with the whole army: while any piece remains, it can move it. */
@@ -468,23 +496,36 @@ export function resolveSacrifice(side: CardSide, ids: unknown, plies: number): S
  * safety net. That ordering is never the wrong one, so resolving it on the server keeps
  * the two ends from ever disagreeing about what was spent.
  */
-export function resolveSpend(side: CardSide, piece: string, explicitId?: number): Spend | null {
-  if (piece === FREE_PIECE) return { kind: 'none' };
+export function resolveSpend(side: CardSide, piece: string, explicitId?: number,
+                             castling = false): Spend | null {
+  // Castling is the one king move that is not free, because it is not only a king move:
+  // the rook crosses the board with him. Charging nothing for it made the king's freedom
+  // -- which exists so that no hand can lock you out of the game -- quietly double as a
+  // way to develop a rook you had no card for, and it was the strongest thing you could
+  // do with an empty hand. It costs a Rook card, so it is paid for exactly as the rook
+  // move it contains would be.
+  const payFor = castling ? 'r' : piece;
+  if (payFor === FREE_PIECE) return { kind: 'none' };
 
   if (explicitId != null) {
     if (explicitId === EMERGENCY_CARD_ID) {
       return side.emergency ? { kind: 'emergency' } : null;
     }
     const card = side.hand.find(c => c.id === explicitId);
-    if (!card || !cardCovers(card, piece)) return null;
+    if (!card || !cardCovers(card, payFor)) return null;
     return { kind: 'card', card };
   }
 
-  const exact = side.hand.find(c => c.kind !== 'wild' && cardCovers(c, piece));
+  const exact = side.hand.find(c => c.kind !== 'wild' && cardCovers(c, payFor));
   if (exact) return { kind: 'card', card: exact };
   const wild = side.hand.find(c => c.kind === 'wild');
   if (wild) return { kind: 'card', card: wild };
   return side.emergency ? { kind: 'emergency' } : null;
+}
+
+/** True when this hand could pay for a castle right now: a Rook card, a Wild, or the net. */
+export function canCastle(side: CardSide): boolean {
+  return side.emergency || side.hand.some(c => cardCovers(c, 'r'));
 }
 
 /** Remove a card from hand and lay it face up on the discard pile. */
@@ -542,7 +583,7 @@ export function mulligan(side: CardSide): boolean {
 
 // ---------- serialisation ----------
 
-function sidePublic(side: CardSide, plies: number): CardSidePublic {
+function sidePublic(side: CardSide, plies: number, handCap: number): CardSidePublic {
   return {
     handCount: side.hand.length,
     deckCount: side.deck.length,
@@ -555,14 +596,16 @@ function sidePublic(side: CardSide, plies: number): CardSidePublic {
     // of the cooldown is already theirs; hiding the count left would only mean both
     // players counting plies on their fingers.
     sacrificeReadyIn: sacrificeReadyIn(side, plies),
+    handCap,
   };
 }
 
 /** What both players may see: counts and a face-up discard, never a hand. */
-export function cardsPublic(cards: CardsState, plies: number): CardsPublic {
+export function cardsPublic(cards: CardsState, plies: number,
+                            caps: Record<Color, number>): CardsPublic {
   return {
-    white: sidePublic(cards.white, plies),
-    black: sidePublic(cards.black, plies),
+    white: sidePublic(cards.white, plies, caps.white),
+    black: sidePublic(cards.black, plies, caps.black),
     drawPerTurn: drawPerTurnFor(plies),
     handMax: TUNING.handMax,
     sacrificeCost: TUNING.sacrificeCost,

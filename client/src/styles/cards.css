@@ -507,3 +507,6 @@
   line-height: 1.5;
   color: var(--text-faint);
 }
+
+/* The cap has closed in with the army: news, not a constant. */
+.meta-shrunk { color: var(--accent); }

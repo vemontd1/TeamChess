@@ -289,7 +289,7 @@ export class CardHand {
       <div class="cards-meta">
         <span title="Cards left in your draw pile">Deck ${me ? me.deckCount : opp.deckCount}</span>
         <span title="Cards dealt at the start of each turn">Deal ${cards.drawPerTurn}</span>
-        <span title="A hand never grows past this; the deal simply stops">Cap ${cards.handMax}</span>
+        ${capMeta(cards, me)}
         ${sacrificeMeta(cards, me)}
         ${cards.enraged
           ? '<span class="meta-hot" title="Twenty plies in: both sides deal one more">Enraged</span>'
@@ -333,6 +333,13 @@ export class CardHand {
       const kinds = [...new Set(hand.cycled)].map(k => KIND_PLURAL[k]);
       set('note-swap', `Nothing in hand could move — dealt past `
         + `${hand.cycled.length > 1 ? 'those cards' : 'that card'} (${listOf(kinds)}).`);
+      return;
+    }
+    // A castle you cannot pay for is a rule the board is silently enforcing, so it says
+    // why rather than leaving the player to wonder what happened to their king.
+    if (!hand.canCastle) {
+      set('note-live', 'Play a card, or just move. No Rook card, so castling is out — '
+        + 'the rook travels too, and it has to be paid for.');
       return;
     }
     set('note-live', 'Play a card, or just move — the matching card is spent.');
@@ -535,6 +542,21 @@ export class CardHand {
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
   }
+}
+
+/**
+ * The hand cap, and whether it has started to close in.
+ *
+ * It falls with the army -- a card is only worth holding while you still own a piece it
+ * names -- so below the maximum it is news rather than a constant, and says so.
+ */
+function capMeta(cards: CardsPublic, me: CardSidePublic | null): string {
+  const cap = me ? me.handCap : cards.handMax;
+  const shrunk = cap < cards.handMax;
+  return `<span class="${shrunk ? 'meta-shrunk' : ''}" title="${shrunk
+    ? 'Fewer piece kinds left on the board means fewer cards worth holding. '
+      + 'Nothing is taken from you: the deal stops until your hand is back under the cap.'
+    : 'A hand never grows past this; the deal simply stops'}">Cap ${cap}</span>`;
 }
 
 /**

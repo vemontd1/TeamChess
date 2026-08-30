@@ -38,6 +38,14 @@ export interface CardSidePublic {
   sacrificesUsed: number;
   /** Plies until this side may sacrifice again; 0 means now. */
   sacrificeReadyIn: number;
+  /**
+   * How many cards this side may hold right now.
+   *
+   * Not a constant: it falls with the army, because a card is only worth holding while
+   * you still own a piece it names. Public, because both players can count each other's
+   * pieces anyway.
+   */
+  handCap: number;
 }
 
 export interface CardsPublic {
@@ -74,6 +82,15 @@ export interface HandState {
   sacrificeAvailable: boolean;
   /** Plies until the sacrifice comes off cooldown; 0 when it is ready. */
   sacrificeReadyIn: number;
+  /** The cap this hand is currently held to, which shrinks with the army. */
+  handCap: number;
+  /**
+   * Whether a castle could be paid for out of this hand.
+   *
+   * Castling is the one king move that is not free -- the rook travels too, so it costs a
+   * Rook card. The board needs to know, or it would offer a castle it is about to refuse.
+   */
+  canCastle: boolean;
 }
 
 export interface SeatStats {
@@ -172,6 +189,30 @@ export interface RoomState {
   config: RoomConfig;
 }
 
+// --- accounts ---
+
+/** A registered player, as everyone else may see them. Never carries a hash or a salt. */
+export interface Account {
+  id: string;
+  username: string;
+  createdAt: number;
+}
+
+export interface AuthResult {
+  ok: boolean;
+  error?: string;
+  account?: Account;
+  /**
+   * The signed session the client stores. Separate from the seat token on purpose:
+   * signing out must not cost you the seat you are sitting in, and reclaiming a seat
+   * must not require being signed in.
+   */
+  session?: string;
+}
+
+export interface AuthPayload { username?: string; password?: string; }
+export interface SessionPayload { session?: string; }
+
 // --- the archive: finished games kept on disk ---
 
 export type GameResult = 'white' | 'black' | 'draw' | 'unfinished';
@@ -250,7 +291,11 @@ export interface You {
 
 // --- socket event payloads ---
 export interface CreatePayload { name: string; config: Partial<RoomConfig>; }
-export interface JoinPayload { roomId: string; name: string; token?: string; }
+export interface JoinPayload {
+  roomId: string; name: string; token?: string;
+  /** A signed session, if the player is signed in. The account names them if so. */
+  session?: string;
+}
 export interface SeatTakePayload { color: Color; seatId: number; }
 export interface SeatBotPayload { color: Color; seatId: number; bot: boolean; }
 export interface MovePayload {

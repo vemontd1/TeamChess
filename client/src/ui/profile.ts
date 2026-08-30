@@ -5,13 +5,11 @@ import * as net from '../net/socket';
 import type { ProfileGame, ProfileView } from '../types';
 
 /**
- * The player's own record: a name, a tally, and the games behind it.
+ * The signed-in player's record: a name, a tally, and the games behind it.
  *
- * Deliberately thin. There is no account to make and nothing to log into -- the browser
- * token that already reclaims your seat is the identity, so this panel simply appears the
- * first time you finish a game and fills in from then on. That also sets its limits, and
- * they are worth being plain about in the panel itself: clear the browser's storage, or
- * open the game somewhere else, and this is a different player.
+ * Belongs to an account, which is the point of having accounts: the browser token this
+ * used to hang on could not survive clearing the browser and could not follow anyone to a
+ * second device. Guests see the sign-in panel here instead, and nothing is kept for them.
  *
  * Every row opens the game it names. That is the point of keeping them at all -- a record
  * of results you cannot look inside is a scoreboard, not a history.
@@ -51,9 +49,10 @@ function gameRow(g: ProfileGame): string {
  *
  * The fetch is fire-and-forget: a profile that cannot be read is not a reason to hold up
  * the home screen, so the panel simply stays hidden and the player creates a room as they
- * always did. Returns a reload, for after a name change.
+ * always did. Returns a setter, so the caller can hand it a profile it already has --
+ * signing in returns one in the same round trip -- or pass null to reload.
  */
-export function mountProfile(host: HTMLElement): () => void {
+export function mountProfile(host: HTMLElement): (v?: ProfileView | null) => void {
   let view: ProfileView | null = null;
 
   const paint = (): void => {
@@ -75,8 +74,8 @@ export function mountProfile(host: HTMLElement): () => void {
         <span class="prof-tally"><b>${wins}</b> won</span>
         <span class="prof-tally"><b>${draws}</b> drawn</span>
         <span class="prof-tally"><b>${losses}</b> lost</span>
-        <span class="prof-note" title="Your record lives in this browser, under the same
-          token that reclaims your seat when you refresh">this browser</span>
+        <span class="prof-note" title="Signed in, so this record follows you to any
+          browser or device">your account</span>
       </div>
       <div class="prof-games">${games.map(gameRow).join('')}</div>`;
 
@@ -91,11 +90,11 @@ export function mountProfile(host: HTMLElement): () => void {
     });
   };
 
-  const load = (): void => {
+  const load = (given?: ProfileView | null): void => {
+    if (given !== undefined) { view = given; paint(); return; }
     void net.myProfile(20).then(res => { view = res; paint(); }).catch(() => {});
   };
 
   host.hidden = true;
-  load();
   return load;
 }

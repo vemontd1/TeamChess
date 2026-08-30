@@ -30,12 +30,21 @@ interface VerboseMove {
  * played rather than one the cards never permitted. It falls back to the full pool if the
  * narrowing leaves nothing, which cannot happen while the king is free but costs nothing
  * to guard.
+ *
+ * `allowCastle: false` removes castling from the pool entirely, including from that
+ * fallback -- in cards mode it is the one king move that has to be paid for.
  */
-export function pickMove(chess: Chess, style: MoveStyle,
-                         allowedTypes?: Set<string>): PickedMove | null {
+export function pickMove(chess: Chess, style: MoveStyle, allowedTypes?: Set<string>,
+                         opts: { allowCastle?: boolean } = {}): PickedMove | null {
   const all = chess.moves({ verbose: true }) as unknown as VerboseMove[];
-  const narrowed = allowedTypes ? all.filter(m => allowedTypes.has(m.piece)) : all;
-  const moves = narrowed.length > 0 ? narrowed : all;
+  const castles = (m: VerboseMove): boolean =>
+    m.flags.includes('k') || m.flags.includes('q');
+  // Castling is a king move, so `allowedTypes` waves it through -- but in cards mode it
+  // costs a Rook card, and a hand without one cannot play it. Filtered before the pool is
+  // narrowed, so the fallback below cannot quietly hand it back.
+  const legal = opts.allowCastle === false ? all.filter(m => !castles(m)) : all;
+  const narrowed = allowedTypes ? legal.filter(m => allowedTypes.has(m.piece)) : legal;
+  const moves = narrowed.length > 0 ? narrowed : legal;
   if (moves.length === 0) return null;
 
   const take = (m: VerboseMove): PickedMove => ({

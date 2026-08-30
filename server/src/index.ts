@@ -9,16 +9,20 @@ import {
   rooms, createRoom, sanitizeConfig, teamFor, activeSeat, seatByToken,
   occupiedCount, applyMove, undoPly, clearTimer, clearTakeback, armTurn,
   playForcedMove, serialize, resetGame, channelFor, chatFor, cleanChatText,
-  pushChat, toggleMark, clearMarksFor, marksFor, clearDraw, useMulligan,
+  pushChat, toggleMark, clearMarksFor, marksFor, clearDraw, useMulligan, handCapOf,
   type Room, type TurnHooks,
 } from './room.js';
-import { handView, canSacrifice, sacrificeReadyIn, TUNING } from './cards.js';
+import { handView, canSacrifice, sacrificeReadyIn, canCastle, TUNING } from './cards.js';
 import { initArchive, saveGame, listGames, loadGame, toPgn } from './archive.js';
-import { initProfiles, touchProfile, recordGame, profileView, myProfile } from './profiles.js';
+import { initProfiles, touchProfile, recordGame, profileView } from './profiles.js';
+import {
+  initAccounts, register, login, accountFromSession,
+} from './accounts.js';
 import type {
   Color, CreatePayload, JoinPayload, SeatTakePayload, SeatBotPayload,
   MovePayload, TakebackRespondPayload, DrawRespondPayload, JoinResult, You,
   ChatSendPayload, MarkTogglePayload, GameResult, GameSummary, ProfileView,
+  Account, AuthPayload, AuthResult, SessionPayload,
 } from './types.js';
 
 const TAKEBACK_WINDOW_MS = 20_000;
@@ -87,13 +91,19 @@ function finishGame(room: Room, result: GameResult, reason: string): void {
   io.to(room.id).emit('game:archived', summary);
 }
 
-/** Put the game on the record of every human who held a seat in it. Bots have no record. */
+/**
+ * Put the game on the record of every signed-in player who held a seat in it.
+ *
+ * Bots have no record, and neither do guests -- there is nothing to record a guest
+ * against. That is the whole reason accounts exist, and it is why the home screen says so
+ * rather than silently keeping nothing.
+ */
 function creditPlayers(room: Room, summary: GameSummary): void {
   for (const color of ['white', 'black'] as Color[]) {
     for (const seat of teamFor(room, color).seats) {
-      if (!seat.token) continue;
+      if (!seat.accountId) continue;
       try {
-        recordGame(seat.token, seat.name ?? 'Player', summary, color);
+        recordGame(seat.accountId, seat.name ?? 'Player', summary, color);
       } catch (err) {
         console.warn('[profiles] could not record a game:', (err as Error).message);
       }
@@ -158,6 +168,8 @@ async function pushHands(room: Room): Promise<void> {
       sacrificeCost: TUNING.sacrificeCost,
       sacrificeAvailable: yourTurn && canSacrifice(side, plies),
       sacrificeReadyIn: sacrificeReadyIn(side, plies),
+      handCap: handCapOf(room, found.color),
+      canCastle: canCastle(side),
     });
   });
 }
@@ -219,8 +231,20 @@ function canStart(room: Room): boolean {
 
 interface SockData {
   roomId?: string; token?: string; name?: string;
+  /** The signed-in account on this socket, if any. Guests leave it undefined. */
+  account?: Account;
   chatTokens?: number; chatAt?: number;
+  /** Failed sign-in attempts on this socket, for the rate limit below. */
+  authTries?: number; authAt?: number;
 }
+
+// Sign-in is the one place a client can make this server do expensive work (a scrypt
+// hash) with an unauthenticated request, so it gets the same treatment chat does: a small
+// burst, then one attempt every few seconds. It is per socket, which is not a serious
+// defence against a determined attacker with many sockets -- it is there to make casual
+// password guessing pointless.
+const AUTH_BURST = 8;
+const AUTH_REFILL_MS = 4_000;
 
 io.on('connection', (socket: Socket) => {
   const data = socket.data as SockData;
@@ -237,7 +261,12 @@ io.on('connection', (socket: Socket) => {
     if (!room) { cb?.({ ok: false, error: 'Room not found' }); return; }
 
     const token = payload.token || randomUUID();
-    const name = (payload.name || 'Player').slice(0, 24);
+    // A signed-in player is named by their account, not by whatever the client sent: the
+    // name on a game's record has to be the one the account is known by, or the archive
+    // would carry a name nobody can be looked up under.
+    const account = accountFromSession(payload.session) ?? data.account ?? null;
+    data.account = account ?? undefined;
+    const name = account ? account.username : (payload.name || 'Player').slice(0, 24);
 
     data.roomId = room.id;
     data.token = token;
@@ -246,15 +275,20 @@ io.on('connection', (socket: Socket) => {
 
     if (!room.hostToken) room.hostToken = token;
 
-    // A join is the only moment this server reliably learns a player's chosen name, so it
-    // is where the profile is created or its name brought up to date.
-    try { touchProfile(token, name); } catch { /* a profile is never worth a failed join */ }
+    // A join is the only moment this server reliably learns a signed-in player's current
+    // name, so it is where the profile is created or brought up to date. Guests have no
+    // profile to touch.
+    if (account) {
+      try { touchProfile(account.id, account.username); }
+      catch { /* a profile is never worth a failed join */ }
+    }
 
     // reconnect: reclaim a seat this token already holds
     const existing = seatByToken(room, token);
     if (existing) {
       existing.seat.connected = true;
       existing.seat.name = name;
+      existing.seat.accountId = account?.id ?? null;
       room.spectators.delete(token);
     } else {
       room.spectators.set(token, name);
@@ -282,10 +316,12 @@ io.on('connection', (socket: Socket) => {
     const prev = seatByToken(room, token);
     if (prev) {
       prev.seat.token = null; prev.seat.name = null; prev.seat.connected = false;
+      prev.seat.accountId = null;
     }
 
     seat.token = token;
-    seat.name = data.name ?? 'Player';
+    seat.name = data.account?.username ?? data.name ?? 'Player';
+    seat.accountId = data.account?.id ?? null;
     seat.kind = 'human';
     seat.connected = true;
     room.spectators.delete(token);
@@ -305,6 +341,7 @@ io.on('connection', (socket: Socket) => {
     if (!found) return;
     found.seat.token = null;
     found.seat.name = null;
+    found.seat.accountId = null;
     found.seat.connected = false;
     room.spectators.set(token, data.name ?? 'Player');
     clearMarksFor(room, token);
@@ -328,12 +365,14 @@ io.on('connection', (socket: Socket) => {
         clearMarksFor(room, seat.token);
       }
       seat.token = null;
+      seat.accountId = null;
       seat.kind = 'bot';
       seat.name = `Bot ${payload.seatId + 1}`;
       seat.connected = true;
     } else {
       seat.kind = 'human';
       seat.name = null;
+      seat.accountId = null;
       seat.connected = false;
     }
 
@@ -389,19 +428,65 @@ io.on('connection', (socket: Socket) => {
     broadcast(room);
   });
 
+  // ---- accounts ----
+
+  /** True while this socket may still attempt a sign-in; refilled by elapsed time. */
+  const authAllowed = (): boolean => {
+    const now = Date.now();
+    const refilled = Math.floor((now - (data.authAt ?? 0)) / AUTH_REFILL_MS);
+    data.authTries = Math.min(AUTH_BURST, (data.authTries ?? AUTH_BURST) + refilled);
+    data.authAt = now;
+    if ((data.authTries ?? 0) <= 0) return false;
+    data.authTries!--;
+    return true;
+  };
+
+  socket.on('auth:register', async (payload: AuthPayload | undefined,
+                                    cb?: (res: AuthResult) => void) => {
+    if (!authAllowed()) { cb?.({ ok: false, error: 'Too many attempts. Wait a moment.' }); return; }
+    const res = await register(payload?.username, payload?.password);
+    if (res.ok && res.account) {
+      data.account = res.account;
+      // A brand-new account gets its profile straight away, so the panel has somewhere to
+      // appear rather than waiting for the first finished game.
+      try { touchProfile(res.account.id, res.account.username); } catch { /* not fatal */ }
+    }
+    cb?.(res);
+  });
+
+  socket.on('auth:login', async (payload: AuthPayload | undefined,
+                                 cb?: (res: AuthResult) => void) => {
+    if (!authAllowed()) { cb?.({ ok: false, error: 'Too many attempts. Wait a moment.' }); return; }
+    const res = await login(payload?.username, payload?.password);
+    if (res.ok && res.account) data.account = res.account;
+    cb?.(res);
+  });
+
+  /** Resume a stored session, and hand back the profile in the same round trip. */
+  socket.on('auth:resume', (payload: SessionPayload | undefined,
+                            cb?: (res: { account: Account | null;
+                                         profile: ProfileView | null }) => void) => {
+    const account = accountFromSession(payload?.session);
+    data.account = account ?? undefined;
+    cb?.({
+      account,
+      profile: account ? profileView(account.id, 25) : null,
+    });
+  });
+
+  socket.on('auth:logout', () => { data.account = undefined; });
+
   /**
-   * The caller's own profile and game list.
+   * The signed-in player's own profile and game list.
    *
-   * The token is taken from the payload as well as the socket, because the home screen
-   * asks for this before it has joined anything. It is the caller's own secret either
-   * way; what comes back is only ever the profile that token derives.
+   * Answered from the socket's account rather than from anything the caller sends, so
+   * there is no id to guess and a guest simply gets nothing.
    */
-  socket.on('profile:me', (payload: { token?: string; limit?: number } | undefined,
+  socket.on('profile:me', (payload: { limit?: number } | undefined,
                            cb?: (res: ProfileView | null) => void) => {
-    const token = data.token ?? payload?.token;
-    if (!token || typeof token !== 'string') { cb?.(null); return; }
+    if (!data.account) { cb?.(null); return; }
     const limit = Number(payload?.limit);
-    cb?.(myProfile(token, Number.isFinite(limit) ? limit : 25));
+    cb?.(profileView(data.account.id, Number.isFinite(limit) ? limit : 25));
   });
 
   // ---- team coordination: chat and marks, both team-scoped ----
@@ -683,6 +768,7 @@ if (fs.existsSync(clientDist)) {
 
 initArchive();
 initProfiles();
+initAccounts();
 
 const PORT = Number(process.env.PORT) || 3001;
 httpServer.listen(PORT, () => {

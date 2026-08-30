@@ -14,8 +14,12 @@ import {
   isEnraged, movableTypes, cardPlayable, cardCovers, refreshEmergency, resolveSpend,
   commitSpend, mulligan, cardsPublic, handView, snapshotCards, extinctTypes,
   replaceExtinct, cycleForPlayable, canSacrifice, sacrificeReadyIn, resolveSacrifice,
+  aliveTypeCount, handCapFor, canCastle,
   EMERGENCY_CARD_ID,
 } from '../server/src/cards.ts';
+
+/** Both sides at the full cap, for the public-view tests that do not vary it. */
+const FULL_CAPS = { white: TUNING.handMax, black: TUNING.handMax };
 
 /* Assertions read the tuning rather than restating it, so retuning the mode does not
    mean rewriting the tests -- only the composition block below, which is the one place
@@ -222,17 +226,19 @@ check('a mulligan on a hand grown past the opening gives back the opening size',
 })());
 
 log('\n=== 10. Nothing private leaks into the public view ===');
-const pub = cardsPublic(cards, 0);
+const pub = cardsPublic(cards, 0, FULL_CAPS);
 const blob = JSON.stringify(pub);
 check('the public view names no card', !blob.includes('"id"') && !blob.includes('"kind"'), blob);
 check('it does carry the counts',
   pub.white.handCount === HAND && pub.white.deckCount === DECK - HAND
   && pub.white.discardCount === 0);
+check('the cap it was given is reported per side',
+  pub.white.handCap === TUNING.handMax && pub.black.handCap === TUNING.handMax);
 check('and the current deal, the cap and the sacrifice price',
   pub.drawPerTurn === TUNING.drawPerTurn && pub.handMax === TUNING.handMax
   && pub.sacrificeCost === TUNING.sacrificeCost && pub.enraged === false);
 check('the enraged view reports one more',
-  cardsPublic(cards, 22).drawPerTurn === TUNING.enrageDrawPerTurn);
+  cardsPublic(cards, 22, FULL_CAPS).drawPerTurn === TUNING.enrageDrawPerTurn);
 
 const view = handView(bareSide('pawn', 'rook'), opening, true);
 check('your own hand marks the live card and the dead one',
@@ -400,5 +406,77 @@ log('\n=== 14. The sacrifice: three cards for any move, on a cooldown ===');
   })());
 }
 
+
+log('\n=== 15. The hand cap follows the army down ===');
+{
+  check('a full army gets the full cap',
+    handCapFor(5) === TUNING.handMax, String(handCapFor(5)));
+  check('each piece kind lost costs a card',
+    handCapFor(4) === 6 && handCapFor(3) === 5 && handCapFor(2) === 4);
+  check('and it floors rather than reaching zero',
+    handCapFor(1) === TUNING.handMin && handCapFor(0) === TUNING.handMin);
+
+  check('the opening position has every kind alive',
+    aliveTypeCount(opening, 'white') === 5 && aliveTypeCount(opening, 'black') === 5);
+  const thin = new Chess('4k3/8/8/8/8/8/4P3/R3K3 w Q - 0 1');
+  check('a rook and a pawn is two kinds', aliveTypeCount(thin, 'white') === 2);
+  check('a bare king is none', aliveTypeCount(thin, 'black') === 0);
+
+  // Nothing is confiscated when the cap falls: the deal simply stops until the hand has
+  // been spent back under it. A player who loses a piece must not lose cards for it.
+  const shrunk = createCards().white;
+  drawCards(shrunk, 4, TUNING.handMax);
+  const held = shrunk.hand.length;
+  check('the hand is over a cap that has just fallen', held > handCapFor(2));
+  check('dealing into an overfull hand takes nothing',
+    drawCards(shrunk, 2, handCapFor(2)) === 0 && shrunk.hand.length === held);
+  check('and the capture bonus respects the same cap',
+    drawBonus(shrunk, handCapFor(2)) === 0 && shrunk.hand.length === held);
+  check('once back under it, the deal resumes', (() => {
+    shrunk.hand.length = handCapFor(2) - 1;
+    return drawCards(shrunk, 2, handCapFor(2)) === 1;
+  })());
+}
+
+log('\n=== 16. Castling is the one king move that is paid for ===');
+{
+  // The rook travels too, so a castle costs a Rook card. Without it the king's freedom --
+  // which exists so no hand can lock you out -- doubled as a free rook development.
+  const withRook = bareSide('pawn', 'rook');
+  const noRook = bareSide('pawn', 'knight');
+  const wildOnly = bareSide('pawn', 'wild');
+
+  check('an ordinary king move is still free',
+    resolveSpend(withRook, 'k')?.kind === 'none'
+    && resolveSpend(noRook, 'k')?.kind === 'none');
+
+  const paid = resolveSpend(withRook, 'k', undefined, true);
+  check('a castle is paid for with the Rook card',
+    paid?.kind === 'card' && paid.card.kind === 'rook', JSON.stringify(paid));
+  check('a Wild pays for one too', (() => {
+    const w = resolveSpend(wildOnly, 'k', undefined, true);
+    return w?.kind === 'card' && w.card.kind === 'wild';
+  })());
+  check('a hand with neither cannot castle',
+    resolveSpend(noRook, 'k', undefined, true) === null);
+  check('and naming a card that is not a rook is refused',
+    resolveSpend(withRook, 'k', withRook.hand[0].id, true) === null);
+
+  check('canCastle agrees with what resolveSpend will do',
+    canCastle(withRook) === true && canCastle(wildOnly) === true
+    && canCastle(noRook) === false);
+  check('the safety net can pay for a castle too', (() => {
+    const dead = bareSide('knight');
+    dead.emergency = true;
+    return canCastle(dead) === true
+      && resolveSpend(dead, 'k', undefined, true)?.kind === 'emergency';
+  })());
+
+  const spent = resolveSpend(withRook, 'k', undefined, true);
+  commitSpend(withRook, spent);
+  check('paying for a castle really spends the card',
+    withRook.hand.length === 1 && withRook.played[0] === 'rook',
+    JSON.stringify(withRook.played));
+}
 log(`\n${failures === 0 ? 'ALL CARD CHECKS PASSED' : `${failures} CARD CHECK(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

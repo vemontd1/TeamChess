@@ -130,6 +130,37 @@ cards" but "I have five good cards and not the one this position is asking for".
 deliberately not modelled by the harness: the harness plays random affordable moves, and a
 sacrifice is the least random decision in the game.
 
+## The hand follows the army down
+
+The sweep above says the cap is the only lever that moves `open`, and it says nothing at
+all about the endgame, because a fixed cap has no endgame behaviour to measure. A hand of
+seven against a rook and three pawns is not a hand of seven — it is two useful cards and
+five that name pieces you do not own, refilled every turn by the extinction swap.
+
+So the cap is no longer fixed. It is `handPerType` (2) plus the number of piece kinds you
+still have, floored at `handMin` (3):
+
+| kinds left | 5 | 4 | 3 | 2 | 1 | 0 |
+|---|---|---|---|---|---|---|
+| **cap** | 7 | 6 | 5 | 4 | 3 | 3 |
+
+Nothing is confiscated when it falls. The deal stops until the hand has been spent back
+down under the new cap, so a shrinking army costs you draws rather than cards you were
+counting on — which matters, because the cap usually falls *because* something of yours
+was just taken, and charging for that twice would be a punishment rather than a rule.
+
+## Castling has a price
+
+Castling was free, because it is a king move and king moves are free. That exemption
+exists so that no hand can lock a player out of the game, and free castling quietly turned
+it into something else: the strongest developing move available to an empty hand, and a
+way to bring a rook into play without ever holding a Rook card.
+
+It now costs one — the rook travels too, so it is paid for exactly as the rook move it
+contains would be. With four Rook cards in thirty-six and one Wild, that is a real price
+and a real decision about when to spend it. The board does not offer a castle the hand
+cannot pay for, and the hand panel says why rather than leaving the king looking broken.
+
 ## The shipped tuning
 
 `TUNING` in `server/src/cards.ts` is the only place these live.
@@ -141,6 +172,8 @@ sacrifice is the least random decision in the game.
 | Per-turn deal, enraged | refill to 6 | refill to 4 | **3** |
 | Hand cap | 7 | 7 | 7 |
 | Sacrifice cost / cooldown | — | — | **3 cards / 10 plies** |
+| Castling | free | free | **1 Rook card** |
+| Hand cap in the endgame | 7 | 7 | **2 + kinds alive, min 3** |
 | Pawn | 10 | 11 | **14** |
 | Knight | 7 | 8 | 8 |
 | Bishop | 7 | 8 | **7** |
