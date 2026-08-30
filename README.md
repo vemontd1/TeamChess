@@ -207,11 +207,27 @@ cleared browser and could not follow anyone to a second device.
 **Playing does not need one.** A guest can create a room, take a seat, play a full game
 and have it archived like any other. What a guest does not get is the record, because
 there is nothing to record it against — and inventing a per-browser identity to hang it on
-is the thing that did not work. The panel on the home screen says exactly that rather than
-implying the game is behind a sign-up.
+is the thing that did not work. Every page says that plainly rather than implying the game
+is behind a sign-up.
 
-Your profile holds a name, a win/draw/loss tally, and the games behind it — every one of
-which opens in a replay you can step through.
+### Where things are
+
+The header is on every page outside the room, and the right-hand corner answers one
+question in one fixed place: **your avatar and name when signed in, Log in / Sign up when
+not.** The answer moving around depending on what it is would be the worst of both.
+
+| route | page |
+|---|---|
+| `#/` | home — create or join a game |
+| `#/login`, `#/signup` | sign in, or register; either redirects to the profile if already signed in |
+| `#/profile` | your avatar, tally and games; redirects to `#/login` if signed out |
+| `#/r/<code>` | a room, with its own header |
+
+The profile is the shape a chess site uses, because it is the shape people already read:
+identity and tally at the top, then a dense list of games where each row is one match —
+both players, mode, length, when, result — and the whole row opens the replay. Avatars are
+generated from the name (initials on a hashed hue), so there is nothing to upload and no
+account that starts out blank.
 
 ### How it is kept
 
@@ -228,6 +244,9 @@ Sessions last a month.
 The session and the seat token stay separate on purpose: **signing out must not stand you
 up from the board you are sitting at**, and reclaiming a seat must not require being
 signed in.
+
+The session is resolved once, before the first render, so a signed-in player never sees
+the signed-out header flash past on a cold load.
 
 | variable | what it sets |
 |---|---|

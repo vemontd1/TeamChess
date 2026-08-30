@@ -1,10 +1,9 @@
-import { createRoom, getName, setName, resumeSession } from '../net/socket';
+import { createRoom, getName, setName } from '../net/socket';
 import { sfx, unlockAudio } from '../audio/sfx';
 import { toast } from './widgets';
 import { Slider, Segmented, toggle } from './controls';
-import { mountProfile } from './profile';
-import { AuthPanel } from './auth';
-import type { Account } from '../types';
+import { renderAppBar, bindAppBar } from './appbar';
+import { getState } from '../state/store';
 
 const TIMER_STOPS = [
   { value: 10, label: '10' }, { value: 15, label: '15' }, { value: 20, label: '20' },
@@ -19,7 +18,10 @@ const TEAM_STOPS = [
 
 /** Landing screen: name yourself, tune the match, then create or join. */
 export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): void {
+  const account = getState().account;
+
   root.innerHTML = `
+    ${renderAppBar(account, { active: 'home' })}
     <div class="home">
       <div class="home-card">
         <header class="hero">
@@ -71,10 +73,13 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
           </div>
         </section>
 
-        <div id="auth-slot"></div>
-        <section class="panel edge prof-panel" id="profile" hidden></section>
+        ${account ? '' : `<p class="home-guest">
+          Playing as a guest — <a href="#/signup">create an account</a> to keep a record of
+          your games, or <a href="#/login">log in</a>.</p>`}
       </div>
     </div>`;
+
+  bindAppBar(root);
 
   const nm = root.querySelector<HTMLInputElement>('#nm')!;
   const code = root.querySelector<HTMLInputElement>('#code')!;
@@ -129,41 +134,13 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
   });
   root.querySelector('#timer-slot')!.appendChild(timer.el);
 
-  // Your own record and the games on it. Fetched rather than waited for: neither a
-  // profile nor a session that will not load may be the reason a room cannot be created.
-  const showProfile = mountProfile(root.querySelector<HTMLElement>('#profile')!);
-
+  // A signed-in player is named by their account -- that is the name the server puts on
+  // the record either way -- so the name field is theirs to read, not to edit.
   const nameField = root.querySelector<HTMLElement>('.tfield')!;
-
-  /**
-   * Signing in takes over the name field.
-   *
-   * A signed-in player is named by their account -- that is the name the server will put
-   * on the game record either way -- so leaving an editable name box beside it would be
-   * offering a choice that does not exist.
-   */
-  const paintAccount = (account: Account | null): void => {
-    nameField.hidden = account != null;
-    if (account) nm.value = account.username;
-  };
-
-  const auth = new AuthPanel({
-    onChange: account => {
-      paintAccount(account);
-      // A fresh account has no games yet, so this clears the panel rather than leaving
-      // the previous player's list on screen.
-      showProfile(account ? undefined : null);
-    },
-  });
-  root.querySelector<HTMLElement>('#auth-slot')!.appendChild(auth.el);
-
-  // Resume in one round trip, so a signed-in player never sees the signed-out panel flash
-  // past on the way in.
-  void resumeSession().then(({ account, profile }) => {
-    auth.setAccount(account);
-    paintAccount(account);
-    showProfile(profile);
-  }).catch(() => {});
+  if (account) {
+    nameField.hidden = true;
+    nm.value = account.username;
+  }
 
   const saveName = (): string => {
     const v = nm.value.trim() || 'Player';

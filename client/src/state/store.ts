@@ -1,6 +1,7 @@
 import { Chess } from 'chess.js';
 import type {
   RoomState, You, ChatMessage, MarkView, HandState, HistoryEntry, GameSummary,
+  Account, ProfileView,
 } from '../types';
 
 /** The position every game starts from, and what ply 0 shows in review. */
@@ -24,6 +25,16 @@ export interface AppState {
   marks: MarkView[];
   /** The finished game's archive entry, once the server has written it. */
   archived: GameSummary | null;
+  /**
+   * The signed-in account, or null for a guest.
+   *
+   * Resolved once at startup from the stored session, then kept here rather than fetched
+   * per page: the header on every page outside the room has to know the answer, and
+   * asking again on each navigation would flash the signed-out header on the way in.
+   */
+  account: Account | null;
+  /** The profile last fetched, so arriving at the profile page is not a spinner. */
+  profile: ProfileView | null;
   /** Cards mode: your own hand. Null in team mode, or if you hold no seat. */
   hand: HandState | null;
   /** The card you have picked to pay for your next move; null lets the server choose. */
@@ -52,6 +63,8 @@ const state: AppState = {
   chat: [],
   marks: [],
   archived: null,
+  account: null,
+  profile: null,
   hand: null,
   selectedCardId: null,
   reviewPly: null,

@@ -1,0 +1,342 @@
+/* ============================================================
+   The pages around the game: the site header, sign-in, profile
+   ============================================================ */
+
+/* ---- generated avatar --------------------------------------------------------
+   Initials on a hue hashed from the name. No uploads and no default image, which
+   also means it can never be blank -- and every account has just been created. */
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: hsl(var(--avatar-h) 70% 90%);
+  background:
+    linear-gradient(150deg,
+      hsl(var(--avatar-h) 42% 34%),
+      hsl(calc(var(--avatar-h) + 24) 38% 22%));
+  box-shadow: inset 0 0 0 1px hsl(var(--avatar-h) 45% 55% / 0.35);
+  user-select: none;
+}
+
+.avatar-sm {
+  width: calc(24px * var(--ui));
+  height: calc(24px * var(--ui));
+  font-size: calc(10px * var(--ui));
+}
+.avatar-md {
+  width: calc(38px * var(--ui));
+  height: calc(38px * var(--ui));
+  font-size: calc(15px * var(--ui));
+}
+.avatar-lg {
+  width: calc(84px * var(--ui));
+  height: calc(84px * var(--ui));
+  font-size: calc(32px * var(--ui));
+  box-shadow:
+    inset 0 0 0 1px hsl(var(--avatar-h) 45% 60% / 0.4),
+    0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+/* An anchor styled as a button needs telling: `.btn` sets no display, so an <a> stays
+   inline -- which leaves its underline showing and lets the primary sheen, absolutely
+   positioned inside an inline box with overflow hidden, escape as a stray highlight. */
+
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+/* ---- the site header ---------------------------------------------------------
+   Who you are lives in one fixed corner, whichever the answer is. The room has its
+   own header full of controls that only exist during a game; this one belongs to
+   the pages around it. */
+
+.appbar {
+  display: flex;
+  align-items: center;
+  gap: calc(12px * var(--ui));
+  padding: calc(12px * var(--ui)) calc(26px * var(--ui));
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.appbar-spacer { flex: 1 1 auto; }
+
+.appbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-decoration: none;
+  color: var(--text);
+}
+.appbar-brand b {
+  font-family: var(--font-display);
+  font-size: calc(15px * var(--ui));
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.appbar-mark { color: var(--accent); font-size: calc(19px * var(--ui)); line-height: 1; }
+.appbar-brand:hover b { color: var(--accent); }
+
+.appbar-me {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 12px 5px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  text-decoration: none;
+  color: var(--text-dim);
+  transition: border-color var(--dur-ui) var(--ease-out),
+              background var(--dur-ui) var(--ease-out);
+}
+.appbar-me:hover, .appbar-me.on {
+  border-color: var(--panel-edge-strong);
+  background: var(--accent-wash);
+  color: var(--text);
+}
+.appbar-name {
+  font-size: calc(13px * var(--ui));
+  font-weight: 500;
+  max-width: calc(160px * var(--ui));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- page shell ---- */
+
+.page {
+  max-width: calc(880px * var(--ui));
+  margin: 0 auto;
+  padding: calc(30px * var(--ui)) calc(24px * var(--ui)) calc(60px * var(--ui));
+  display: flex;
+  flex-direction: column;
+  gap: calc(18px * var(--ui));
+}
+.page-narrow { max-width: calc(420px * var(--ui)); }
+
+/* ---- sign in / sign up ---- */
+
+.auth-card { overflow: hidden; }
+
+.auth-head {
+  text-align: center;
+  padding: calc(28px * var(--ui)) calc(26px * var(--ui)) calc(6px * var(--ui));
+}
+.auth-mark {
+  font-size: calc(34px * var(--ui));
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 10px;
+}
+.auth-head h1 {
+  font-family: var(--font-display);
+  font-size: calc(24px * var(--ui));
+  font-weight: 600;
+  margin: 0 0 7px;
+}
+.auth-head p {
+  margin: 0;
+  font-size: calc(13px * var(--ui));
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+
+.auth-form { gap: calc(13px * var(--ui)); }
+.auth-form .btn-lg { width: 100%; justify-content: center; }
+
+.auth-rules {
+  font-size: calc(11px * var(--ui));
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.auth-err {
+  font-size: calc(12.5px * var(--ui));
+  color: var(--danger);
+  padding: 8px 11px;
+  border-radius: 6px;
+  background: rgba(214, 90, 70, 0.1);
+  border: 1px solid rgba(214, 90, 70, 0.3);
+}
+.auth-err[hidden] { display: none; }
+
+.auth-foot {
+  padding: calc(14px * var(--ui)) calc(26px * var(--ui));
+  border-top: 1px solid var(--line);
+  text-align: center;
+  font-size: calc(12.5px * var(--ui));
+  color: var(--text-faint);
+}
+.auth-foot a { color: var(--accent); text-decoration: none; }
+.auth-foot a:hover { text-decoration: underline; }
+.auth-sep { margin: 0 8px; opacity: 0.5; }
+
+.auth-note {
+  margin: 0;
+  text-align: center;
+  font-size: calc(12px * var(--ui));
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+/* ---- the guest line on the home screen ---- */
+
+.home-guest {
+  margin: calc(16px * var(--ui)) 0 0;
+  text-align: center;
+  font-size: calc(12.5px * var(--ui));
+  color: var(--text-faint);
+}
+.home-guest a { color: var(--accent); text-decoration: none; }
+.home-guest a:hover { text-decoration: underline; }
+
+/* ---- profile: the identity block ---- */
+
+.prof-hero {
+  display: flex;
+  align-items: center;
+  gap: calc(20px * var(--ui));
+  padding: calc(24px * var(--ui)) calc(26px * var(--ui));
+  flex-wrap: wrap;
+}
+
+.prof-id { min-width: 0; }
+.prof-id h1 {
+  font-family: var(--font-display);
+  font-size: calc(26px * var(--ui));
+  font-weight: 600;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.prof-since {
+  margin-top: 3px;
+  font-size: calc(12px * var(--ui));
+  color: var(--text-faint);
+}
+
+.prof-tallies {
+  display: flex;
+  gap: calc(22px * var(--ui));
+  margin-left: auto;
+}
+.tally { text-align: center; }
+.tally b {
+  display: block;
+  font-family: var(--font-display);
+  font-size: calc(24px * var(--ui));
+  font-weight: 600;
+  line-height: 1.1;
+}
+.tally span {
+  font-size: calc(10.5px * var(--ui));
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.tally-win b { color: #86C58A; }
+.tally-loss b { color: #D97F6C; }
+
+.prof-out { align-self: flex-start; }
+
+/* ---- profile: the game list --------------------------------------------------
+   The value of the page is here, so the list gets the space: one row per match,
+   the whole row a link into the replay. */
+
+.games-panel { overflow: hidden; }
+.games-count { margin-left: auto; font-size: calc(11px * var(--ui)); color: var(--text-faint); }
+
+.games-list { display: flex; flex-direction: column; }
+
+.game-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: calc(16px * var(--ui));
+  width: 100%;
+  padding: calc(11px * var(--ui)) calc(18px * var(--ui));
+  background: none;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-top: 1px solid var(--line);
+  font: inherit;
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-ui) var(--ease-out),
+              border-color var(--dur-ui) var(--ease-out);
+}
+.game-row:first-child { border-top: 0; }
+.game-row:hover { background: var(--accent-wash); border-left-color: var(--accent); }
+.game-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.game-row:disabled { opacity: 0.55; cursor: progress; }
+
+.game-players {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.game-side { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.game-name {
+  font-size: calc(13px * var(--ui));
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-vs { font-size: calc(11px * var(--ui)); color: var(--text-faint); flex: 0 0 auto; }
+
+.game-mode, .game-plies, .game-when {
+  font-size: calc(11.5px * var(--ui));
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.game-res {
+  min-width: calc(76px * var(--ui));
+  text-align: center;
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: calc(11px * var(--ui));
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.game-res-win  { background: rgba(120, 190, 120, 0.15); color: #86C58A; }
+.game-res-loss { background: rgba(214, 90, 70, 0.15); color: #D97F6C; }
+.game-res-draw { background: rgba(255, 255, 255, 0.07); color: var(--text-dim); }
+.game-res-none { background: rgba(255, 255, 255, 0.04); color: var(--text-faint); }
+
+.games-loading, .games-empty {
+  padding: calc(34px * var(--ui)) calc(24px * var(--ui));
+  text-align: center;
+  color: var(--text-faint);
+  font-size: calc(13px * var(--ui));
+}
+.games-empty-mark {
+  font-size: calc(38px * var(--ui));
+  color: var(--accent);
+  opacity: 0.4;
+  margin-bottom: 10px;
+}
+.games-empty p { margin: 0 auto calc(18px * var(--ui)); max-width: 40ch; line-height: 1.6; }
+
+/* The five columns stop fitting well before the page does; the metadata folds away
+   first, because the pairing and the result are what a row is read for. */
+@media (max-width: 720px) {
+  .game-row { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+  .game-mode, .game-plies { display: none; }
+  .prof-tallies { margin-left: 0; width: 100%; justify-content: space-between; }
+  .appbar { padding: 10px 16px; }
+  .appbar-brand b { display: none; }
+}
