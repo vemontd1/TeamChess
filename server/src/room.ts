@@ -201,6 +201,16 @@ export function occupiedCount(team: Team): number {
 }
 
 /**
+ * The first seat nobody is in, or null when the team is full.
+ *
+ * Resolving this on the server is what lets the client offer one Join button instead of a
+ * row of them: the caller says which side it wants, not which chair.
+ */
+export function firstFreeSeat(team: Team): InternalSeat | null {
+  return team.seats.find(s => !isOccupied(s)) ?? null;
+}
+
+/**
  * The seat whose turn it is for this team.
  *
  * With skipEmptySeats the rotation closes over occupied seats only. Without it every seat

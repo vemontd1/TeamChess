@@ -331,14 +331,20 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   cardsHost.appendChild(cardHand.el);
 
   const teamHandlers = {
-    onTake: async (color: Color, seatId: number) => {
+    // No seat is named: the server picks the first free one, so two people pressing Join
+    // at the same moment cannot both be told a seat they never chose was taken.
+    onJoin: async (color: Color) => {
       unlockAudio();
-      const res = await net.takeSeat(color, seatId);
-      if (!res.ok) toast(res.error ?? 'Could not take that seat', 'danger');
+      const res = await net.takeSeat(color);
+      if (!res.ok) toast(res.error ?? 'Could not join that side', 'danger');
       else setState({ you: res.you ?? null });
     },
-    onLeave: () => { net.leaveSeat(); setState({ you: getState().you && { ...getState().you!, seat: null } }); },
-    onToggleBot: (color: Color, seatId: number, bot: boolean) => net.setSeatBot(color, seatId, bot),
+    onLeave: () => {
+      net.leaveSeat();
+      setState({ you: getState().you && { ...getState().you!, seat: null } });
+    },
+    onAddBot: (color: Color) => { unlockAudio(); net.setSeatBot(color, undefined, true); },
+    onRemoveBot: (color: Color, seatId: number) => net.setSeatBot(color, seatId, false),
   };
 
   const whitePanel = new TeamPanel('white', teamHandlers);

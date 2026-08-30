@@ -2,15 +2,30 @@ import type { TeamView, Color, You, RoomState } from '../types';
 import { escapeHtml } from './timerRing';
 
 export interface TeamPanelHandlers {
-  onTake: (color: Color, seatId: number) => void;
+  /** Join this side. The server picks the seat. */
+  onJoin: (color: Color) => void;
   onLeave: () => void;
-  onToggleBot: (color: Color, seatId: number, bot: boolean) => void;
+  /** Host only: add a bot to this side, or take a named one back out. */
+  onAddBot: (color: Color) => void;
+  onRemoveBot: (color: Color, seatId: number) => void;
 }
 
 /**
- * A team roster. The active seat is tracked between renders so control visibly moves
- * from one card to the next -- the handoff is the clearest signal of how this game
- * differs from ordinary chess, so it gets a real animation rather than a colour swap.
+ * A team roster.
+ *
+ * The seats used to carry their own controls: a Sit button on every empty row and, for the
+ * host, a bot toggle on every row including occupied ones. That put two contradictory
+ * offers on the same slot -- sit here, and also make this a bot -- and the second one
+ * evicted whoever took the first. It also asked a question nobody has an answer to: which
+ * of three identical empty chairs would you like?
+ *
+ * So the seats are a list now, and the actions belong to the team: one Join, and for the
+ * host one Add bot. Removing a bot stays on the bot's own row, because that one *is* about
+ * a particular seat.
+ *
+ * The active seat is tracked between renders so control visibly moves from one card to the
+ * next -- the handoff is the clearest signal of how this game differs from ordinary chess,
+ * so it gets a real animation rather than a colour swap.
  */
 export class TeamPanel {
   readonly el: HTMLElement;
@@ -30,6 +45,10 @@ export class TeamPanel {
     const active = team.activeSeatId;
     const label = this.color === 'white' ? 'Team White' : 'Team Black';
     const filled = team.seats.filter(s => s.occupied).length;
+    const full = filled >= team.seats.length;
+    const onThisTeam = you?.seat?.color === this.color;
+    const seatedElsewhere = you?.seat != null && !onThisTeam;
+    const lobby = state.status !== 'playing';
 
     this.el.classList.toggle('team-on', live);
 
@@ -41,7 +60,7 @@ export class TeamPanel {
       </div>
       <div class="roster">
         ${team.seats.map(seat => {
-          const mine = you?.seat?.color === this.color && you.seat.seatId === seat.id;
+          const mine = onThisTeam && you!.seat!.seatId === seat.id;
           const isActive = live && active === seat.id;
           const cls = [
             'seat',
@@ -49,9 +68,7 @@ export class TeamPanel {
             !seat.occupied ? 'seat-empty' : '',
           ].filter(Boolean).join(' ');
 
-          const name = seat.occupied
-            ? escapeHtml(seat.name ?? 'Player')
-            : 'Open seat';
+          const name = seat.occupied ? escapeHtml(seat.name ?? 'Player') : 'Open seat';
 
           const tags: string[] = [];
           if (mine) tags.push('<span class="seat-tag tag-you">You</span>');
@@ -60,29 +77,37 @@ export class TeamPanel {
             tags.push('<span class="seat-tag tag-off">Away</span>');
           }
 
-          const actions: string[] = [];
-          if (state.status !== 'playing') {
-            if (mine) {
-              actions.push(`<button class="btn btn-sm btn-ghost" data-act="leave">Leave</button>`);
-            } else if (!seat.occupied) {
-              actions.push(`<button class="btn btn-sm" data-act="take" data-seat="${seat.id}">Sit</button>`);
-            }
-            if (isHost) {
-              actions.push(`<button class="btn btn-sm btn-ghost" data-act="bot"
-                data-seat="${seat.id}" data-bot="${seat.kind === 'bot' ? '0' : '1'}"
-                title="${seat.kind === 'bot' ? 'Make this a human seat' : 'Fill with a bot'}"
-                >${seat.kind === 'bot' ? '✕' : '🤖'}</button>`);
-            }
-          }
+          // The only per-seat control left, because it is the only one that is genuinely
+          // about a particular seat rather than about the team.
+          const actions = isHost && lobby && seat.kind === 'bot'
+            ? `<button class="btn btn-sm btn-ghost seat-remove" data-act="unbot"
+                 data-seat="${seat.id}" title="Remove this bot"
+                 aria-label="Remove bot in seat ${seat.id + 1}">✕</button>`
+            : '';
 
           return `<div class="${cls}" data-seat-id="${seat.id}">
             <span class="seat-idx">${seat.id + 1}</span>
             <span class="seat-name">${name}</span>
             ${tags.join('')}
-            <span class="seat-actions">${actions.join('')}</span>
+            <span class="seat-actions">${actions}</span>
           </div>`;
         }).join('')}
-      </div>`;
+      </div>
+      ${lobby ? `<div class="team-actions">
+        ${onThisTeam
+          ? `<button class="btn btn-lg team-join team-leave" data-act="leave">
+               Leave ${this.color === 'white' ? 'White' : 'Black'}</button>`
+          : `<button class="btn btn-lg btn-primary team-join" data-act="join"
+               ${full || seatedElsewhere ? 'disabled' : ''}
+               title="${full ? 'This side is full'
+                 : seatedElsewhere ? 'Leave your current seat first' : ''}">
+               ${full ? 'Side full' : `Join ${this.color === 'white' ? 'White' : 'Black'}`}
+             </button>`}
+        ${isHost ? `<button class="btn btn-sm btn-ghost team-bot" data-act="bot"
+             ${full ? 'disabled' : ''}
+             title="${full ? 'No free seat for a bot' : 'Fill a free seat with a bot'}"
+             >+ Bot</button>` : ''}
+      </div>` : ''}`;
 
     this.wire();
     this.animateHandoff(live ? active : null);
@@ -107,12 +132,11 @@ export class TeamPanel {
     this.el.querySelectorAll<HTMLButtonElement>('[data-act]').forEach(btn => {
       btn.addEventListener('click', e => {
         e.stopPropagation();
-        const act = btn.dataset.act;
-        const seatId = Number(btn.dataset.seat);
-        if (act === 'take') this.handlers.onTake(this.color, seatId);
-        else if (act === 'leave') this.handlers.onLeave();
-        else if (act === 'bot') {
-          this.handlers.onToggleBot(this.color, seatId, btn.dataset.bot === '1');
+        switch (btn.dataset.act) {
+          case 'join':  this.handlers.onJoin(this.color); break;
+          case 'leave': this.handlers.onLeave(); break;
+          case 'bot':   this.handlers.onAddBot(this.color); break;
+          case 'unbot': this.handlers.onRemoveBot(this.color, Number(btn.dataset.seat)); break;
         }
       });
     });

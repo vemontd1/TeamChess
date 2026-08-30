@@ -147,8 +147,20 @@ A draw offer goes to the opposing team's active seat and lapses after twenty sec
 unlike a takeback it does not touch the clock, so it cannot be used to stop thinking.
 Resigning ends the game for the whole team, so it asks for confirmation first.
 
-Any seat can be switched to a **bot** by the host, which plays a weak one-ply greedy move —
-useful for uneven teams or for testing. Bots count as occupied seats.
+**Joining a side is one button.** Press **Join White** or **Join Black** and the server
+seats you in the first free chair — three identical empty seats is not a question anyone
+has an answer to, and letting each client pick made every join a small race. The host adds
+bots with **+ Bot**, which also takes a free seat; a bot is removed from its own row.
+
+A seat is one thing at a time. Previously a Sit button and a bot toggle sat on the same
+row offering contradictory things, and taking the second evicted whoever took the first:
+a player could sit where a bot already was (a bot holds no token, so the "taken" check
+never saw it), and the host could turn an occupied seat into a bot. Now a bot never lands
+on a person, a person never lands on a bot, and only a bot can be un-botted.
+
+Bots play a weak one-ply move — material, plus whether the piece can simply be taken back
+— and in Chess Cards they play the mode properly: only moves the hand can pay for, and the
+sacrifice when the gap is worth about a rook. Bots count as occupied seats.
 
 The server is authoritative for every rule: move legality, whose turn it is, the clock, and
 game end. A client that sends a move out of turn is simply refused.

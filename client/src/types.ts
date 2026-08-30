@@ -369,8 +369,14 @@ export interface JoinPayload {
   /** A signed session, if the player is signed in. The account names them if so. */
   session?: string;
 }
-export interface SeatTakePayload { color: Color; seatId: number; }
-export interface SeatBotPayload { color: Color; seatId: number; bot: boolean; }
+/**
+ * `seatId` is optional on both: omitted (or negative) means "the first free seat on that
+ * team", resolved by the server. The client used to pick the seat itself, which made
+ * every join a small race -- two people pressing Join at the same moment both named seat
+ * 1 and one of them got an error about a seat they never chose.
+ */
+export interface SeatTakePayload { color: Color; seatId?: number; }
+export interface SeatBotPayload { color: Color; seatId?: number; bot: boolean; }
 export interface MovePayload {
   from: string; to: string; promotion?: string;
   /** Cards mode: which card pays for this move. Omitted lets the server choose. */

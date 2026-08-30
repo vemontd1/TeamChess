@@ -1402,9 +1402,22 @@ async function main() {
       (await emitCb(plain, 'admin:overview', {})) === null
       && (await emitCb(plain, 'admin:reports', {})) === null);
 
-    // Arch-W is named in ADMIN_USERS for this run.
+    // Admin comes from the server's own environment, by design -- an admin flag stored on
+    // an account would be one file edit away from a privilege escalation. That means this
+    // half of the section can only run against a server started with it, so it says so
+    // rather than failing on how the server happened to be launched.
     const admin = await mkClient('Arch-W');
     const who = await signUp(admin);
+    const configured = who.account?.isAdmin === true;
+    if (!configured) {
+      // `return` here would leave `main()` and take every later section with it.
+      log('  SKIP  the admin half needs: ADMIN_USERS=Arch-W npm start');
+      check('an account not named in ADMIN_USERS is not an admin', true,
+        JSON.stringify(who.account));
+      check('and is refused the panel',
+        (await emitCb(admin, 'admin:overview', {})) === null
+        && (await emitCb(admin, 'admin:reports', {})) === null);
+    } else {
     check('the admin account is flagged as one', who.account?.isAdmin === true,
       JSON.stringify(who.account));
 
@@ -1439,6 +1452,73 @@ async function main() {
     check('a non-admin cannot',
       (await emitCb(plain, 'admin:report-resolve',
         { id: mine.id, resolved: false })) === null);
+    }
+  }
+
+
+  {
+    log('\n=== 31. A seat is one thing at a time ===');
+    const h = await mkClient('Seat-Host');
+    const ridS = await emitCb(h, 'room:create',
+      { name: 'S', config: { teamSize: 3, moveTimerSec: 60 } });
+    const p2 = await mkClient('Seat-Two');
+    const p3 = await mkClient('Seat-Three');
+    for (const c of [h, p2, p3]) await join(c, ridS);
+
+    // Join names a side, not a chair: the server picks the first free seat.
+    const j1 = await emitCb(h, 'seat:take', { color: 'white' });
+    check('joining without naming a seat works', j1.ok === true, j1.error ?? '');
+    check('and lands on the first free one', j1.you?.seat?.seatId === 0,
+      JSON.stringify(j1.you?.seat));
+    const j2 = await emitCb(p2, 'seat:take', { color: 'white' });
+    check('the next player gets the next seat', j2.you?.seat?.seatId === 1,
+      JSON.stringify(j2.you?.seat));
+
+    // A bot goes to a free seat, never on top of a person.
+    h.emit('seat:bot', { color: 'white', bot: true });
+    await sleep(250);
+    check('a bot fills a free seat', h.last.white.seats[2].kind === 'bot',
+      JSON.stringify(h.last.white.seats.map(x => x.kind)));
+    check('and did not evict anyone',
+      h.last.white.seats[0].name === 'Seat-Host' && h.last.white.seats[1].name === 'Seat-Two',
+      JSON.stringify(h.last.white.seats.map(x => x.name)));
+
+    // This is the bug: the same slot could be both sat in and botted.
+    h.emit('seat:bot', { color: 'white', seatId: 0, bot: true });
+    await sleep(250);
+    check('a seat someone is sitting in cannot be turned into a bot',
+      h.last.white.seats[0].kind === 'human' && h.last.white.seats[0].name === 'Seat-Host',
+      JSON.stringify(h.last.white.seats[0]));
+
+    // And the other half of it: a bot's seat is not free to sit on.
+    const onBot = await emitCb(p3, 'seat:take', { color: 'white', seatId: 2 });
+    check('a player cannot sit on top of a bot', onBot.ok === false, JSON.stringify(onBot));
+    check('the bot is still there', h.last.white.seats[2].kind === 'bot');
+
+    const full = await emitCb(p3, 'seat:take', { color: 'white' });
+    check('a full side says so rather than picking an occupied chair',
+      full.ok === false && /full/i.test(full.error ?? ''), JSON.stringify(full));
+
+    // Only a bot can be un-botted.
+    h.emit('seat:bot', { color: 'white', seatId: 1, bot: false });
+    await sleep(250);
+    check('removing a bot from a human seat does nothing',
+      h.last.white.seats[1].kind === 'human' && h.last.white.seats[1].name === 'Seat-Two');
+
+    h.emit('seat:bot', { color: 'white', seatId: 2, bot: false });
+    await sleep(250);
+    check('removing an actual bot frees the seat',
+      h.last.white.seats[2].kind === 'human' && h.last.white.seats[2].occupied === false,
+      JSON.stringify(h.last.white.seats[2]));
+    const now = await emitCb(p3, 'seat:take', { color: 'white' });
+    check('which somebody can then join', now.ok === true && now.you?.seat?.seatId === 2,
+      JSON.stringify(now.you?.seat));
+
+    p2.emit('seat:bot', { color: 'black', bot: true });
+    await sleep(250);
+    check('a non-host cannot add bots',
+      h.last.black.seats.every(x => !x.occupied),
+      JSON.stringify(h.last.black.seats.map(x => x.kind)));
   }
 
   log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import { Server, Socket } from 'socket.io';
 import {
   rooms, createRoom, sanitizeConfig, teamFor, activeSeat, seatByToken,
-  occupiedCount, applyMove, undoPly, clearTimer, clearTakeback, armTurn,
+  occupiedCount, firstFreeSeat, applyMove, undoPly, clearTimer, clearTakeback, armTurn,
   playForcedMove, serialize, resetGame, channelFor, chatFor, cleanChatText,
   pushChat, toggleMark, clearMarksFor, marksFor, clearDraw, useMulligan, handCapOf,
   type Room, type TurnHooks,
@@ -379,8 +379,21 @@ io.on('connection', (socket: Socket) => {
     if (room.status === 'finished') { cb?.({ ok: false, error: 'Game is over' }); return; }
 
     const team = teamFor(room, payload.color);
-    const seat = team.seats[payload.seatId];
-    if (!seat) { cb?.({ ok: false, error: 'No such seat' }); return; }
+
+    // No seat named means "wherever there is room", which is what the Join button asks.
+    const wanted = payload.seatId != null && payload.seatId >= 0
+      ? team.seats[payload.seatId]
+      : firstFreeSeat(team);
+    const seat = wanted;
+    if (!seat) { cb?.({ ok: false, error: 'That side is full' }); return; }
+
+    // A bot holds no token, so the check below could not see one: a player could sit
+    // straight on top of a bot and silently evict it, which is how the same slot ended up
+    // being both sat in and botted. A seat is one thing at a time -- the host takes the
+    // bot out first.
+    if (seat.kind === 'bot') {
+      cb?.({ ok: false, error: 'A bot has that seat — the host can remove it' }); return;
+    }
     if (seat.token != null && seat.token !== token) {
       cb?.({ ok: false, error: 'Seat is taken' }); return;
     }
@@ -429,20 +442,25 @@ io.on('connection', (socket: Socket) => {
     const room = roomOf();
     if (!room || !isHost(room)) return;
     const team = teamFor(room, payload.color);
-    const seat = team.seats[payload.seatId];
+
+    // Adding: the first free seat, unless one is named. Removing: the named seat.
+    const seat = payload.bot && (payload.seatId == null || payload.seatId < 0)
+      ? firstFreeSeat(team)
+      : team.seats[payload.seatId ?? -1];
     if (!seat) return;
 
     if (payload.bot) {
-      if (seat.token) {
-        room.spectators.set(seat.token, seat.name ?? 'Player');
-        clearMarksFor(room, seat.token);
-      }
+      // A bot never takes a seat a person is sitting in. Turning an occupied seat into a
+      // bot evicted whoever was there -- which, next to a Sit button on the same row, is
+      // how one slot could be both joined and botted.
+      if (seat.token != null) return;
       seat.token = null;
       seat.accountId = null;
       seat.kind = 'bot';
-      seat.name = `Bot ${payload.seatId + 1}`;
+      seat.name = `Bot ${seat.id + 1}`;
       seat.connected = true;
     } else {
+      if (seat.kind !== 'bot') return;      // only a bot can be taken out
       seat.kind = 'human';
       seat.name = null;
       seat.accountId = null;

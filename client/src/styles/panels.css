@@ -569,3 +569,37 @@
 }
 
 
+
+/* ---- joining a side ----------------------------------------------------------
+   One button per team rather than one per seat. Three identical empty chairs is
+   not a question anyone has an answer to, and putting a Sit button next to a bot
+   button on the same row offered two things that contradicted each other. */
+
+.team-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(10px * var(--ui)) calc(12px * var(--ui)) calc(12px * var(--ui));
+}
+
+.team-join {
+  flex: 1 1 auto;
+  justify-content: center;
+  padding: calc(11px * var(--ui)) calc(16px * var(--ui));
+  font-size: calc(13.5px * var(--ui));
+}
+.team-join:disabled { opacity: 0.45; cursor: default; }
+
+/* Leaving is not the primary action, so it does not wear the primary colour. */
+.team-leave { font-weight: 500; }
+
+.team-bot { flex: 0 0 auto; white-space: nowrap; }
+
+/* The one control that really is about a particular seat. */
+.seat-remove {
+  padding: 2px 7px;
+  font-size: calc(11px * var(--ui));
+  line-height: 1.4;
+  opacity: 0.65;
+}
+.seat-remove:hover { opacity: 1; color: var(--danger); }

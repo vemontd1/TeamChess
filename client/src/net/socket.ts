@@ -121,7 +121,8 @@ export function resumeSession(): Promise<{ account: Account | null; profile: Pro
   });
 }
 
-export function takeSeat(color: Color, seatId: number): Promise<JoinResult> {
+/** Join a side. The server picks the seat, so two people pressing Join cannot collide. */
+export function takeSeat(color: Color, seatId?: number): Promise<JoinResult> {
   return new Promise(resolve => {
     sock().emit('seat:take', { color, seatId }, (res: JoinResult) => resolve(res));
   });
@@ -131,7 +132,8 @@ export function leaveSeat(): void { sock().emit('seat:leave'); }
 export function sendChat(text: string): void { sock().emit('chat:send', { text }); }
 export function toggleMark(square: string): void { sock().emit('mark:toggle', { square }); }
 export function clearMarks(): void { sock().emit('mark:clear'); }
-export function setSeatBot(color: Color, seatId: number, bot: boolean): void {
+/** Add a bot to a side (no seat named), or take a named bot back out. */
+export function setSeatBot(color: Color, seatId: number | undefined, bot: boolean): void {
   sock().emit('seat:bot', { color, seatId, bot });
 }
 export function startGame(): void { sock().emit('game:start'); }
