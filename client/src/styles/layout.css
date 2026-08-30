@@ -737,9 +737,14 @@
    the same media query in JS, so the two never disagree about which layout is up. */
 
 /* On a desktop this wrapper is not a box at all: its two children go straight into the
-   room grid as their own columns. `order` keeps them either side of the board. */
+   room grid as their own columns. `order` keeps them either side of the board.
+   
+   Which also means that *everything* inside it becomes a grid item on a desktop: the
+   drawer's own furniture has to take itself out of the grid explicitly, or it claims a
+   column and shunts the board into the next one. */
 .side-wrap { display: contents; }
 .drawer-head { display: none; }
+.drawer-actions { display: none; }
 #left  { order: 1; }
 .board-column { order: 2; }
 #right { order: 3; }
@@ -814,7 +819,7 @@
   .brand span { display: none; }
   .brand b { font-size: 15px; }
   .conn-text { display: none; }
-  .topbar .btn { padding: 6px 9px; }
+  .topbar .btn { padding: 6px 9px; white-space: nowrap; }
   .room-me-name { display: none; }
 
   /* The brand is the first thing to give up space: two wrapped lines of it cost more
@@ -850,10 +855,31 @@
   .is-phone .cards-wrap { --card-w: 56px; --card-h: 80px; }
 
   .drawer-head { gap: 8px; }
+  .drawer-head #drawer-prefs { display: flex; gap: 6px; }
   .drawer-head #drawer-exit { margin-left: auto; }
 
-  .board-column { align-items: stretch; }
+  /* The between-games buttons, parked in the drawer where they cost the board nothing. */
+  .drawer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .drawer-actions:empty { display: none; }
+
+  .board-column {
+    align-items: stretch;
+    /* Pinned to the width it is given, so that nothing inside it -- the hand above all --
+       can widen the column instead of being told how much room it has. */
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
   #board { align-self: center; }
+  /* A little air between the opponent's hand and the top of the board, which otherwise
+     runs its frame straight into the strip's corners. */
+  .opp-strip { margin-bottom: 2px; }
 }
 
 /* The menu button is a phone control; on a desktop the panels are simply there. */

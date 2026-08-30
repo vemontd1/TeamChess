@@ -280,11 +280,52 @@
   z-index: 40;
 }
 
-/* On a phone the slot arithmetic does the work on its own: seven cards in 390px means
-   seven narrow cards, which is exactly what it produces. */
-@media (max-width: 780px) {
-  .cards-hand { --gap: 5px; }
+/*
+ * The phone.
+ *
+ * Seven slots in 384 pixels is the whole problem: every pixel the buttons beside the hand
+ * take is a pixel off seven cards at once. So on a phone they lose their labels and keep
+ * their icons -- a skull and a loop, both of which say what they are -- and the hand gets
+ * the rest of the row. The full names stay in `title` and in the button's own aria-label.
+ */
+/*
+ * Written against `.is-phone` rather than as bare selectors inside the query.
+ *
+ * The base rules for these live further down this file, so a single-class rule here would
+ * lose on source order however specific the media query looks -- which it duly did, and
+ * the buttons kept their desktop width while the cards shrank to twenty-one pixels. The
+ * ancestor class outranks them and does not care about order.
+ */
+.is-phone .cards-hand {
+  --gap: 5px;
+  /* A card small enough for seven to fit in 384px is a card nobody can read. They keep a
+     size worth looking at and the hand scrolls when it has to, which on a full hand is
+     about one card's worth. */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  justify-content: flex-start;
+  scrollbar-width: none;
 }
+.is-phone .cards-hand::-webkit-scrollbar { display: none; }
+.is-phone .cards-hand .card {
+  width: calc(46px * var(--ui));
+  flex: 0 0 auto;
+  max-height: none;
+}
+.is-phone .cards-row { gap: 8px; }
+/* Two square taps, centred against the hand rather than stretched the height of it:
+   a 100px-tall icon button is a target nobody needs and looks like a mistake. */
+.is-phone .cards-actions { flex: 0 0 auto; gap: 6px; align-self: center; }
+.is-phone .card-action { flex: 0 0 auto; }
+.is-phone .card-action { padding: calc(9px * var(--ui)); justify-content: center; }
+.is-phone .card-action span { display: none; }
+.is-phone .ca-icon { width: 20px; height: 20px; }
+
+/* One line, not three: the backs and the count are what a glance wants, and the four
+   facts about the deck are reference material that costs the board thirty pixels. */
+.is-phone .opp-facts { display: none; }
+.is-phone .cards-opp { padding: calc(5px * var(--ui)) calc(10px * var(--ui)); }
+.is-phone .opp-spent { padding-left: calc(8px * var(--ui)); }
 
 .card {
   position: relative;

@@ -55,9 +55,11 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
         <div class="side-wrap" id="sidewrap">
           <div class="drawer-head">
             <span>Panels</span>
+            <span id="drawer-prefs"></span>
             <span id="drawer-exit"></span>
             <button class="btn btn-sm btn-ghost" id="drawer-close">Close</button>
           </div>
+          <div class="btn-row drawer-actions" id="drawer-actions"></div>
           <div class="side-column" id="left"><div class="roster-stack" id="rosters"></div></div>
           <div class="side-column" id="right"></div>
         </div>
@@ -158,6 +160,30 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     const wanted = onPhone ? phoneTop : rightCol;
     if (timerPanel.parentElement !== wanted) wanted.prepend(timerPanel);
 
+    /*
+     * On a phone the clock's panel is the only thing above the board, and everything
+     * that rode along with it was costing the board height it cannot spare -- a phone
+     * report came in reading, fairly, "bad formatting on phone screen unplayable".
+     *
+     * So the three buttons that are about the game rather than the position go into the
+     * drawer on a phone, where they are two taps away and cost nothing until they are
+     * wanted. Moved rather than duplicated, for the same reason the clock is.
+     */
+    const actionsHome = onPhone
+      ? root.querySelector<HTMLElement>('#drawer-actions')!
+      : timerPanel;
+    if (gameActions.parentElement !== actionsHome) actionsHome.appendChild(gameActions);
+
+    // Sound and effects are preferences, not moves. On a phone they wrap the header onto
+    // a second line, so they go in the drawer beside the way out.
+    const prefsHome = onPhone
+      ? root.querySelector<HTMLElement>('#drawer-prefs')!
+      : root.querySelector<HTMLElement>('.topbar')!;
+    for (const id of ['#sound', '#fx']) {
+      const btn = root.querySelector<HTMLElement>(id)!;
+      if (btn.parentElement !== prefsHome) prefsHome.appendChild(btn);
+    }
+
     // Exit moves rather than being hidden and rebuilt: the header has no room for it on a
     // phone, and a way out of the room that only exists on a desktop is not a way out.
     const exitBtn = root.querySelector<HTMLElement>('#exit')!;
@@ -237,8 +263,11 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     // only thing on screen, and a generous absolute cap that itself grows with the scale.
     const cap = Math.min(window.innerHeight * 0.84, 1040 * ui);
 
-    const size = Math.max(300, Math.min(availW, availH, cap));
-    boardHost.style.setProperty('--board-size', `${Math.round(size)}px`);
+    // Floored rather than rounded, and two pixels short: every row in the column is
+    // measured to a fraction and the board is the only one that can absorb the rounding.
+    // Two pixels is the difference between a page that fits and a page with a scrollbar.
+    const size = Math.max(300, Math.min(availW, availH, cap) - 2);
+    boardHost.style.setProperty('--board-size', `${Math.floor(size)}px`);
   };
 
   sizeBoard();
