@@ -12,6 +12,13 @@ export interface BoardCallbacks {
   requestPromotion: (color: 'w' | 'b') => Promise<string | null>;
   /** Flag a square for your team (right-click, or X on the keyboard). */
   onMark?: (square: string) => void;
+  /**
+   * A move chosen before it is this player's turn, or null when one is dropped.
+   *
+   * The board only reports it; whether it can be afforded and when it is played are
+   * decisions for the room, which is the thing that knows about cards and turns.
+   */
+  onPremove?: (move: { from: string; to: string } | null) => void;
 }
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
@@ -59,6 +66,19 @@ export class Board {
    * as a bug rather than as a rule.
    */
   private castleOk = true;
+
+  /**
+   * Premoves: choosing your reply while the opponent is still thinking.
+   *
+   * `premoveOn` is whether the board should accept one at all -- it is your seat, the
+   * game is live, and (in cards mode) your hand could pay for the piece. `premove` is the
+   * one currently queued, drawn on the board so it is never a secret what will happen the
+   * instant your turn opens.
+   */
+  private premoveOn = false;
+  private premove: { from: string; to: string } | null = null;
+  private premoveTargets = new Set<string>();
+  private premoveFrom: string | null = null;
 
   private selected: string | null = null;
   private legalTargets = new Set<string>();
@@ -239,6 +259,11 @@ export class Board {
     if (on && !was && this.kbActive) this.say('Your move. The board is yours.');
   }
 
+  /** The queued move, for the room to play the moment the turn opens. */
+  pendingPremove(): { from: string; to: string } | null {
+    return this.premove;
+  }
+
   /**
    * Narrow which of your own pieces can be picked up, by piece type.
    *
@@ -257,6 +282,83 @@ export class Board {
     if (this.selected && !this.canMove(this.selected)) this.clearSelection();
     this.paintReach();
     this.renderMarkers();
+  }
+
+  /** Whether a move may be queued for the turn that has not arrived yet. */
+  setPremoveEnabled(on: boolean): void {
+    if (this.premoveOn === on) return;
+    this.premoveOn = on;
+    if (!on) this.clearPremove();
+  }
+
+  /** Drop the queued move, and tell the room so its own copy goes with it. */
+  clearPremove(announce = true): void {
+    const had = this.premove != null || this.premoveFrom != null;
+    this.premove = null;
+    this.premoveFrom = null;
+    this.premoveTargets.clear();
+    if (had) {
+      this.renderMarkers();
+      if (announce) this.cb.onPremove?.(null);
+    }
+  }
+
+  /**
+   * Where a piece could go if it were this player's turn.
+   *
+   * chess.js only generates moves for the side to move, so the position is reloaded with
+   * the turn flipped. That can be an illegal position -- the opponent has just given
+   * check, say -- in which case there is nothing sensible to offer and premoves are
+   * simply not available for that turn.
+   */
+  private premoveTargetsFor(square: string): Set<string> {
+    const out = new Set<string>();
+    if (!this.myColor) return out;
+    const parts = this.chess.fen().split(' ');
+    if (parts[1] === this.myColor) {
+      // already our turn by the FEN; the ordinary path handles that
+      return out;
+    }
+    parts[1] = this.myColor;
+    parts[3] = '-';        // an en-passant square belongs to the other side's last move
+    try {
+      const probe = new Chess(parts.join(' '));
+      const moves = probe.moves({ square: square as never, verbose: true }) as unknown as
+        Array<{ to: string; flags: string }>;
+      for (const m of moves) {
+        if (!this.castleOk && (m.flags.includes('k') || m.flags.includes('q'))) continue;
+        out.add(m.to);
+      }
+    } catch { /* the flipped position is not legal; offer nothing */ }
+    return out;
+  }
+
+  /** Click-to-queue while it is not your turn. Returns true when the click was used. */
+  private handlePremoveClick(square: string): boolean {
+    if (!this.premoveOn || this.interactive || !this.myColor) return false;
+
+    if (this.premoveFrom && this.premoveTargets.has(square)) {
+      this.premove = { from: this.premoveFrom, to: square };
+      this.premoveFrom = null;
+      this.premoveTargets.clear();
+      this.renderMarkers();
+      this.cb.onPremove?.(this.premove);
+      return true;
+    }
+
+    const piece = this.pieces.get(square);
+    if (piece && piece.code[0] === this.myColor) {
+      // a fresh pick replaces whatever was queued: two queued moves is not a thing
+      this.premove = null;
+      this.premoveFrom = square;
+      this.premoveTargets = this.premoveTargetsFor(square);
+      this.renderMarkers();
+      this.cb.onPremove?.(null);
+      return true;
+    }
+
+    this.clearPremove();
+    return true;
   }
 
   /** Cards mode: whether the hand can pay the Rook card a castle costs. */
@@ -400,6 +502,18 @@ export class Board {
       this.markerLayer.appendChild(m);
       return m;
     };
+
+    if (this.premove) {
+      add(this.premove.from, 'mk-pre');
+      add(this.premove.to, 'mk-pre mk-pre-to');
+    }
+    if (this.premoveFrom) {
+      add(this.premoveFrom, 'mk-pre');
+      let i = 0;
+      for (const t of this.premoveTargets) {
+        add(t, this.pieces.has(t) ? 'mk-pre-capture' : 'mk-pre-move', i++ * 10);
+      }
+    }
 
     if (this.lastMove) {
       add(this.lastMove.from, 'mk-last');
@@ -594,9 +708,18 @@ export class Board {
   };
 
   private onPointerDown = (e: PointerEvent): void => {
-    if (!this.interactive || e.button !== 0) return;
+    if (e.button !== 0) return;
     const square = this.squareFromPoint(e.clientX, e.clientY);
     if (!square) return;
+
+    // Not our turn: the click either queues a move for when it is, or does nothing.
+    if (!this.interactive) {
+      if (this.handlePremoveClick(square)) e.preventDefault();
+      return;
+    }
+
+    // Our turn now, so anything queued has been consumed or overtaken.
+    this.clearPremove(false);
 
     // second click on a legal target completes a click-to-move
     if (this.selected && this.legalTargets.has(square)) {

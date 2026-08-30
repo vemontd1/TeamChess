@@ -45,14 +45,14 @@ the game — castling is the exception, and is dealt with below.
 
 One fixed 36-card deck per side, the same for both players — no deckbuilding:
 
-| Pawn | Knight | Bishop | Rook | Queen | Wild |
-|---|---|---|---|---|---|
-| 14 | 8 | 7 | 4 | 2 | 1 |
+| Pawn | Knight | Bishop | Rook | Queen |
+|---|---|---|---|---|
+| 14 | 8 | 7 | 5 | 2 |
 
-Only four Rook cards, which is what gives castling a price worth thinking about.
-
-A **Wild** moves anything. One copy in thirty-six: a rare universal answer, not a normal
-turn.
+**No Wild.** It answered the same question the sacrifice does — *I can see the move and I
+hold the wrong cards* — but answered it for free, at random, to whoever drew it. Removing
+it took the share of turns where the cards constrain nothing from 26% to 19%. Only five
+Rook cards, which is what gives castling a price worth thinking about.
 
 **The loop.** You open on **one card for each piece kind** — Pawn, Knight, Bishop, Rook,
 Queen — so no game starts stuck and the first turn offers you the whole board. After that
@@ -159,6 +159,56 @@ the duration against its own clock. Subtracting a server epoch from a local `Dat
 correct exactly as long as the two machines agree about the time, and they do not: the
 deployed host ran half a minute behind a player's PC, which pinned every 30-second
 countdown at zero for the whole game. A duration has no clock inside it to disagree with.
+
+## Pre-moves
+
+While your opponent is thinking you can queue your reply: tap your piece, tap where it
+goes. The board draws it in blue rather than amber, because *queued* and *legal now* are
+different claims and the board should not mix them. It plays the instant your turn opens.
+
+In Chess Cards a move can only be queued if your hand **holds** a card for that piece —
+which is a different question from whether it can move right now, and the one worth asking
+off turn. The server still judges it on arrival: a premove is chosen against a position
+the opponent was about to change, so a refusal is expected rather than an error. The move
+is dropped, you are told, and the turn is still yours.
+
+`Esc` clears a queued move.
+
+## On a phone
+
+The board takes touch input properly — the page used to pan under your finger instead of
+moving the piece, which made the game unplayable rather than merely awkward. Tap a piece,
+tap a square.
+
+The layout is rebuilt rather than shrunk. A phone has room for the clock and the board and
+nothing else, so everything read *between* moves — rosters, chat, the move list, stats, the
+card table — goes behind a drawer under **☰**, and the clock lies down into a strip above
+the board. The one live countdown moves between the two layouts rather than being
+duplicated.
+
+## Reporting a bug
+
+**Report a bug** in the header, or the ⚑ in a room. The report carries the room, the game,
+the mode, the position, the ply count, the viewport and the browser along with your
+sentence — and shows you exactly what it is attaching before it sends, because a report
+that quietly collects context is a report people stop trusting.
+
+Reports land in `data/reports` and are read in the admin panel.
+
+## Admin
+
+`ADMIN_USERS=alice,bob` names the administrators. It is deliberately an environment
+variable rather than a field on an account: an admin flag stored beside a password hash is
+one file edit away from being a privilege escalation.
+
+`#/admin` shows what the app has actually gathered — games by mode, result and ending, the
+room setups people choose, accounts, live rooms, recent games (each opening in the replay),
+and the bug reports with a done/reopen toggle. It is computed on demand from the archive
+rather than from a separate analytics stream, so there is nothing to keep in sync.
+
+Access is decided by the server on every call from the session's account, so the page never
+asks whether it should be allowed to draw itself: it asks for data and draws what comes
+back.
 
 ## Stepping back through a game
 
@@ -271,6 +321,8 @@ the signed-out header flash past on a cold load.
 |---|---|
 | `ACCOUNTS_DIR` | where accounts live (default `data/accounts`) |
 | `SESSION_SECRET` | the key that signs sessions — set this in production |
+| `ADMIN_USERS` | comma-separated usernames that may open `#/admin` |
+| `REPORTS_DIR` | where bug reports live (default `data/reports`) |
 
 Without `SESSION_SECRET` a key is generated and written beside the accounts, which is fine
 locally and survives a restart; on a host with an ephemeral filesystem, set it, or every
@@ -361,6 +413,7 @@ sending everything to everyone and asking the client to hide it.
   it, or just move a piece and the matching card is spent for you — the exact card before a
   Wild, and a Wild before the emergency move. Pieces you cannot reach this turn are dimmed.
 - To **sacrifice**, press the button, click three cards to burn, then move any piece.
+- While the opponent thinks, tap a piece and a square to **queue** your reply; `Esc` clears it.
 - Castling needs a Rook card (or a Wild); without one the board will not offer it.
 - **←** / **→** step back and forward through the game, **Home** / **End** jump to either
   end, **Esc** returns to the live position. Clicking a move in the history does the same.

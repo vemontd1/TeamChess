@@ -2,6 +2,7 @@ import { io, type Socket } from 'socket.io-client';
 import type {
   RoomState, JoinResult, RoomConfig, Color, MovePayload, MoveFx, ChatMessage, MarkView,
   GameEnded, HandState, ProfileView, ArchivedGame, GameSummary, Account, AuthResult,
+  AdminOverview, BugReport,
 } from '../types';
 import { setState } from '../state/store';
 
@@ -180,6 +181,42 @@ export async function fetchRecentGames(limit = 20): Promise<GameSummary[]> {
     const res = await fetch(`/api/games?limit=${limit}`);
     return res.ok ? (await res.json()) as GameSummary[] : [];
   } catch { return []; }
+}
+
+// ---- bug reports and admin ----
+
+/** File a report. The context is whatever the caller could see when it was written. */
+export function sendReport(text: string, context: Record<string, unknown>):
+    Promise<{ ok: boolean; error?: string }> {
+  return new Promise(resolve => {
+    sock().emit('report:send', { text, context },
+      (res: { ok: boolean; error?: string } | undefined) =>
+        resolve(res ?? { ok: false, error: 'No answer from the server.' }));
+  });
+}
+
+/**
+ * The admin calls all answer null when the socket's account is not an administrator.
+ * The check lives on the server and is re-derived per call, so these are requests rather
+ * than assertions about who is asking.
+ */
+export function adminOverview(): Promise<AdminOverview | null> {
+  return new Promise(resolve => {
+    sock().emit('admin:overview', {}, (res: AdminOverview | null) => resolve(res ?? null));
+  });
+}
+
+export function adminReports(limit = 200): Promise<BugReport[] | null> {
+  return new Promise(resolve => {
+    sock().emit('admin:reports', { limit }, (res: BugReport[] | null) => resolve(res ?? null));
+  });
+}
+
+export function adminResolveReport(id: string, resolved: boolean): Promise<BugReport | null> {
+  return new Promise(resolve => {
+    sock().emit('admin:report-resolve', { id, resolved },
+      (res: BugReport | null) => resolve(res ?? null));
+  });
 }
 
 /** Where a game's PGN lives, for the download link on the review screen. */

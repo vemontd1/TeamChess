@@ -80,13 +80,20 @@ export const TUNING = {
   /**
    * One fixed symmetrical deck for both players; no deckbuilding in the MVP.
    *
-   * The doc's shape, still thirty-six, with Wild cut from four copies to one and the
-   * copies it freed given to the pieces that already had the most. Duplicates are the
-   * whole source of constraint: seven cards spread over six kinds would be no constraint
-   * at all, and seven cards that keep turning out to be four pawns is a position to solve.
+   * The doc's shape, still thirty-six, and now with no Wild at all. It went from four
+   * copies to one when it measured as the single biggest reason the cards did not
+   * constrain, and the sacrifice has since taken over the job it was left doing: the
+   * answer to "I can see the move and hold the wrong cards" is now a decision that costs
+   * three cards and a cooldown, rather than a card that occasionally makes the problem
+   * vanish for free. Two answers to one question, one of them free, is one too many.
+   *
+   * Its copy went to the Rook, which castling made the tightest kind in the deck.
+   *
+   * `wild` stays in the type and in every reader: games already archived were played with
+   * it, and a record that cannot describe what happened is worse than an unused branch.
    */
   deck: [
-    ['pawn', 14], ['knight', 8], ['bishop', 7], ['rook', 4], ['queen', 2], ['wild', 1],
+    ['pawn', 14], ['knight', 8], ['bishop', 7], ['rook', 5], ['queen', 2],
   ] as Array<[CardKind, number]>,
 };
 
@@ -177,10 +184,24 @@ function makeSide(seqStart: number): { side: CardSide; seq: number } {
  * last case is what keeps a mulligan from handing back a hand of three because the deck
  * happened to be out of rooks.
  */
-export function dealOpening(side: CardSide): Card[] {
+export interface DealOptions {
+  /** Piece kinds the holder no longer has: never worth dealing a card for. */
+  extinct?: Set<string>;
+  /** The hand cap in force, which shrinks with the army. */
+  cap?: number;
+}
+
+export function dealOpening(side: CardSide, opts: DealOptions = {}): Card[] {
+  const cap = opts.cap ?? TUNING.handMax;
+  const extinct = opts.extinct;
   const dealt: Card[] = [];
+
   for (const kind of TUNING.openingKinds) {
-    if (side.hand.length >= TUNING.handMax) break;
+    if (side.hand.length >= cap) break;
+    // A card for a piece that is not on the board is dead the moment it is dealt, so it
+    // is never dealt. At the start of a game nothing is extinct and this does nothing;
+    // on a mulligan late in a game it is the difference between five live cards and two.
+    if (extinct && extinct.has(CARD_PIECE[kind as Exclude<CardKind, 'wild'>])) continue;
     const card = takeKind(side, kind) ?? drawOne(side);
     if (!card) break;                       // both piles empty: nothing left anywhere
     side.hand.push(card);
@@ -488,6 +509,39 @@ export function resolveSacrifice(side: CardSide, ids: unknown, plies: number): S
 }
 
 /**
+ * Which cards a bot should burn for a sacrifice.
+ *
+ * Dead cards first -- they cannot move anything in this position anyway, so they are the
+ * cheapest three a hand can offer -- and then the most duplicated kind, since a hand of
+ * four pawns loses less by giving one up than a hand with a single Queen does.
+ *
+ * Returns null when the hand cannot cover the cost, so the caller can simply not
+ * sacrifice rather than having to check first.
+ */
+export function chooseSacrificeCards(side: CardSide, chess: Chess): Card[] | null {
+  if (side.hand.length < TUNING.sacrificeCost) return null;
+  const movable = movableTypes(chess);
+
+  const counts = new Map<CardKind, number>();
+  for (const c of side.hand) counts.set(c.kind, (counts.get(c.kind) ?? 0) + 1);
+
+  const ranked = [...side.hand].sort((a, b) => {
+    const deadA = cardPlayable(a, movable) ? 1 : 0;
+    const deadB = cardPlayable(b, movable) ? 1 : 0;
+    if (deadA !== deadB) return deadA - deadB;                 // dead ones go first
+    const dupA = counts.get(a.kind) ?? 0;
+    const dupB = counts.get(b.kind) ?? 0;
+    if (dupA !== dupB) return dupB - dupA;                     // then the most duplicated
+    return CARD_ORDER.indexOf(a.kind) - CARD_ORDER.indexOf(b.kind);
+  });
+
+  return ranked.slice(0, TUNING.sacrificeCost);
+}
+
+/** Cheapest first, for deciding what a bot can most afford to lose. */
+const CARD_ORDER: CardKind[] = ['pawn', 'knight', 'bishop', 'rook', 'queen', 'wild'];
+
+/**
  * Decide which card pays for a move.
  *
  * When the client names one, that choice is honoured if it is legal. When it names none
@@ -573,11 +627,11 @@ export function commitSpend(side: CardSide, spend: Spend): CardKind | null {
  * it. The cost is what it always was: the cards banked up to now are gone, and a hand of
  * seven becomes a hand of five.
  */
-export function mulligan(side: CardSide): boolean {
+export function mulligan(side: CardSide, opts: DealOptions = {}): boolean {
   if (side.mulliganUsed) return false;
   side.mulliganUsed = true;
   while (side.hand.length > 0) side.discard.push(side.hand.pop()!);
-  dealOpening(side);
+  dealOpening(side, opts);
   return true;
 }
 

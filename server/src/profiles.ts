@@ -93,12 +93,35 @@ export function initProfiles(): void {
       const p = JSON.parse(raw) as StoredProfile;
       // parsed rather than trusted, for the same reason the archive is: one bad file
       // should cost one profile, not the whole store
-      if (p?.id && Array.isArray(p.games) && p.record) cache.set(p.id, p);
+      if (p?.id && Array.isArray(p.games) && p.record) {
+        cache.set(p.id, backfillDays(p));
+      }
     } catch {
       console.warn(`[profiles] skipping unreadable ${name}`);
     }
   }
   console.log(`[profiles] ${cache.size} profile(s) in ${DIR}`);
+}
+
+/**
+ * Give an older profile the per-day counts it was saved without.
+ *
+ * The activity grid is fed by `days`, which is counted as games are recorded. Profiles
+ * written before that field existed have none, so their grid came up empty despite a list
+ * of games sitting right underneath it. The games carry `finishedAt`, so the counts can
+ * be rebuilt from them -- capped at whatever the list still holds, which is the best that
+ * can be known and a great deal better than nothing.
+ */
+function backfillDays(p: StoredProfile): StoredProfile {
+  if (p.days && Object.keys(p.days).length > 0) return p;
+  const days: Record<string, number> = {};
+  for (const g of p.games) {
+    if (typeof g?.finishedAt !== 'number') continue;
+    const k = dayKey(g.finishedAt);
+    days[k] = (days[k] ?? 0) + 1;
+  }
+  p.days = days;
+  return p;
 }
 
 function save(p: StoredProfile): void {
@@ -198,6 +221,12 @@ export function recordGame(
 
   p.lastSeenAt = Date.now();
   save(p);
+}
+
+/** How many profiles exist, for the admin overview. */
+export function profileCount(): number {
+  if (!ready) initProfiles();
+  return cache.size;
 }
 
 export function profileView(id: string, limit = 25): ProfileView | null {

@@ -1,6 +1,7 @@
 import { escapeHtml } from './timerRing';
 import { avatarHtml } from './avatar';
 import { sfx } from '../audio/sfx';
+import { openBugReport } from './reportBug';
 import type { Account } from '../types';
 
 /**
@@ -37,13 +38,17 @@ export function renderAppBar(account: Account | null, opts: AppBarOptions = {}):
         <b>Bolotnoye Logovo</b>
       </a>
       <div class="appbar-spacer"></div>
+      ${account?.isAdmin ? `<a class="btn btn-sm btn-ghost" href="#/admin">Admin</a>` : ''}
+      <button class="btn btn-sm btn-ghost appbar-bug" data-bug
+              title="Report a problem">Report a bug</button>
       ${right}
     </header>`;
 }
 
-/** Wire the header's own clicks. Navigation is by href, so this is only the sound. */
+/** Wire the header's own clicks. Navigation is by href, so this is mostly the sound. */
 export function bindAppBar(root: HTMLElement): void {
   root.querySelectorAll('.appbar a').forEach(a => {
     a.addEventListener('click', () => sfx.click());
   });
+  root.querySelector('[data-bug]')?.addEventListener('click', () => openBugReport());
 }

@@ -137,8 +137,31 @@ function save(a: StoredAccount): boolean {
   }
 }
 
+/**
+ * Admin comes from the environment, not from the account file.
+ *
+ * `ADMIN_USERS=alice,bob` and nothing else. It is deliberately not a field anyone can
+ * write: an admin flag stored beside a password hash is one file edit away from being a
+ * privilege escalation, and this way the answer is the same on every restart and obvious
+ * from the deployment's own configuration.
+ */
+const ADMINS = new Set(
+  (process.env.ADMIN_USERS ?? '')
+    .split(',')
+    .map(n => n.trim().toLowerCase())
+    .filter(Boolean));
+
+export function isAdminName(username: string): boolean {
+  return ADMINS.has(username.toLowerCase());
+}
+
 function publicOf(a: StoredAccount): Account {
-  return { id: a.id, username: a.username, createdAt: a.createdAt };
+  return {
+    id: a.id,
+    username: a.username,
+    createdAt: a.createdAt,
+    isAdmin: ADMINS.has(a.usernameLower) || undefined,
+  };
 }
 
 // ---------- sessions ----------
@@ -247,6 +270,12 @@ export async function login(username: unknown, password: unknown): Promise<AuthR
   a.lastSeenAt = Date.now();
   save(a);
   return { ok: true, account: publicOf(a), session: makeSession(a.id) };
+}
+
+/** How many accounts exist, for the admin overview. */
+export function accountCount(): number {
+  if (!ready) initAccounts();
+  return byId.size;
 }
 
 export function accountById(id: string): Account | null {

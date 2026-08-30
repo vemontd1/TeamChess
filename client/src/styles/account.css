@@ -377,8 +377,11 @@ a.btn {
   width: calc(11px * var(--ui));
   height: calc(11px * var(--ui));
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  transition: box-shadow 120ms var(--ease-out);
 }
+.act-cell:hover { box-shadow: inset 0 0 0 1px var(--accent-glow); }
 /* Amber rather than green: the rest of the interface is amber, and a green heatmap
    would look borrowed from somewhere else. */
 .act-l1 { background: rgba(232, 176, 75, 0.28); }
@@ -530,4 +533,244 @@ a.btn {
   .prof-face { flex-wrap: wrap; }
   .appbar { padding: 10px 16px; }
   .appbar-brand b { display: none; }
+}
+
+/* ---- report a bug -----------------------------------------------------------
+   Filed from wherever the reporter is standing, which is the only place the room,
+   the game and the position can be picked up automatically. */
+
+.report-field textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: calc(96px * var(--ui));
+  font: inherit;
+  font-size: calc(13.5px * var(--ui));
+  line-height: 1.55;
+  padding: 11px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--panel-edge);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+}
+.report-field textarea:focus {
+  outline: none;
+  border-color: var(--panel-edge-strong);
+}
+
+/* Shown before it is sent: a report that quietly collects context is a report people
+   stop trusting. */
+.report-ctx {
+  margin-top: 12px;
+  text-align: left;
+  font-size: calc(11px * var(--ui));
+  color: var(--text-faint);
+}
+.report-ctx-label {
+  display: block;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: calc(9.5px * var(--ui));
+  margin-bottom: 3px;
+}
+.report-ctx code {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.report-err {
+  margin-top: 12px;
+  font-size: calc(12.5px * var(--ui));
+  color: var(--danger);
+  padding: 8px 11px;
+  border-radius: 6px;
+  background: rgba(214, 90, 70, 0.1);
+  border: 1px solid rgba(214, 90, 70, 0.3);
+}
+.report-err[hidden] { display: none; }
+
+/* ---- admin ------------------------------------------------------------------
+   A reader over the archive and the stores. Nothing here writes a game. */
+
+.page-wide { max-width: calc(1080px * var(--ui)); }
+
+.adm-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(20px * var(--ui));
+  padding: calc(22px * var(--ui)) calc(26px * var(--ui));
+}
+.adm-head h1 {
+  font-family: var(--font-display);
+  font-size: calc(26px * var(--ui));
+  font-weight: 600;
+  margin: 0;
+}
+.adm-head p {
+  margin: 4px 0 0;
+  font-size: calc(12.5px * var(--ui));
+  color: var(--text-faint);
+}
+
+.adm-cards { display: flex; flex-wrap: wrap; gap: calc(22px * var(--ui)); margin-left: auto; }
+.adm-card { text-align: center; }
+.adm-card b {
+  display: block;
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-size: calc(24px * var(--ui));
+  font-weight: 650;
+  line-height: 1.05;
+}
+.adm-card span {
+  display: block;
+  margin-top: 3px;
+  font-size: calc(9.5px * var(--ui));
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.adm-card-hot b { color: var(--danger); }
+
+.adm-tabs { display: flex; gap: 8px; }
+.adm-tab {
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: calc(13px * var(--ui));
+  cursor: pointer;
+  transition: all var(--dur-ui) var(--ease-out);
+}
+.adm-tab:hover { border-color: var(--panel-edge); color: var(--text); }
+.adm-tab.on {
+  background: var(--accent-wash);
+  border-color: var(--panel-edge-strong);
+  color: var(--accent);
+}
+
+.adm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(calc(260px * var(--ui)), 1fr));
+  gap: calc(20px * var(--ui));
+  padding: calc(18px * var(--ui));
+}
+.adm-tally h3 {
+  margin: 0 0 10px;
+  font-size: calc(10.5px * var(--ui));
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  font-weight: 600;
+}
+.adm-setups { padding: calc(18px * var(--ui)); }
+
+.adm-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) calc(80px * var(--ui)) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: calc(12.5px * var(--ui));
+  color: var(--text-dim);
+}
+.adm-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adm-bar {
+  height: calc(6px * var(--ui));
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+.adm-bar i { display: block; height: 100%; background: var(--accent); opacity: 0.7; }
+.adm-n {
+  font-variant-numeric: tabular-nums lining-nums;
+  color: var(--text);
+  min-width: calc(30px * var(--ui));
+  text-align: right;
+}
+.adm-pct {
+  font-variant-numeric: tabular-nums lining-nums;
+  color: var(--text-faint);
+  min-width: calc(38px * var(--ui));
+  text-align: right;
+  font-size: calc(11px * var(--ui));
+}
+
+.adm-games { display: flex; flex-direction: column; }
+.adm-game {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: calc(14px * var(--ui));
+  padding: calc(9px * var(--ui)) calc(18px * var(--ui));
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-left: 2px solid transparent;
+  background: none;
+  font: inherit;
+  font-size: calc(12.5px * var(--ui));
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+}
+.adm-game:first-child { border-top: 0; }
+.adm-game:hover { background: var(--accent-wash); border-left-color: var(--accent); }
+.adm-game-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.adm-game-who i { font-style: normal; color: var(--text-faint); margin: 0 4px; }
+.adm-game-mode, .adm-game-plies, .adm-game-res, .adm-game-when {
+  font-size: calc(11px * var(--ui));
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.adm-reports { display: flex; flex-direction: column; }
+.adm-report {
+  padding: calc(14px * var(--ui)) calc(18px * var(--ui));
+  border-top: 1px solid var(--line);
+  border-left: 2px solid var(--danger);
+}
+.adm-report:first-child { border-top: 0; }
+.adm-report.done { border-left-color: transparent; opacity: 0.55; }
+.adm-report header { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+.adm-rep-who { font-weight: 600; color: var(--text); font-size: calc(13px * var(--ui)); }
+.adm-rep-when { font-size: calc(11px * var(--ui)); color: var(--text-faint); }
+.adm-report header .btn { margin-left: auto; }
+.adm-rep-text {
+  margin: 0 0 8px;
+  font-size: calc(13.5px * var(--ui));
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.adm-rep-ctx { display: flex; flex-wrap: wrap; gap: 6px; }
+.adm-rep-ctx span {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: calc(10.5px * var(--ui));
+  color: var(--text-faint);
+}
+.adm-rep-fen, .adm-rep-ua code {
+  display: block;
+  margin-top: 7px;
+  font-family: var(--font-mono);
+  font-size: calc(10.5px * var(--ui));
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+.adm-rep-ua { margin-top: 6px; }
+.adm-rep-ua summary {
+  font-size: calc(10.5px * var(--ui));
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .adm-cards { margin-left: 0; gap: 14px; }
+  .adm-game { grid-template-columns: minmax(0, 1fr) auto; }
+  .adm-game-mode, .adm-game-plies, .adm-game-res { display: none; }
 }

@@ -12,6 +12,7 @@ import { renderHome } from './ui/home';
 import { renderRoom } from './ui/room';
 import { renderLogin } from './ui/loginPage';
 import { renderProfile } from './ui/profilePage';
+import { renderAdmin } from './ui/adminPage';
 import { askName } from './ui/nameGate';
 import { toast } from './ui/widgets';
 import { connect, joinRoom, getName, resumeSession } from './net/socket';
@@ -28,7 +29,8 @@ function parseRoute(): string | null {
   return m ? m[1].toLowerCase() : null;
 }
 
-type Page = { kind: 'room'; id: string } | { kind: 'home' | 'login' | 'signup' | 'profile' };
+type Page = { kind: 'room'; id: string }
+  | { kind: 'home' | 'login' | 'signup' | 'profile' | 'admin' };
 
 function parsePage(): Page {
   const id = parseRoute();
@@ -37,6 +39,7 @@ function parsePage(): Page {
   if (hash === 'login') return { kind: 'login' };
   if (hash === 'signup') return { kind: 'signup' };
   if (hash === 'profile') return { kind: 'profile' };
+  if (hash === 'admin') return { kind: 'admin' };
   return { kind: 'home' };
 }
 
@@ -72,6 +75,13 @@ async function route(): Promise<void> {
       return;
     }
 
+    if (page.kind === 'admin') {
+      if (!account) { location.hash = '#/login'; return; }
+      // Whether this account may see anything is the server's call, made per request.
+      teardown = renderAdmin(app, account);
+      return;
+    }
+
     renderHome(app, id => { location.hash = `#/r/${id}`; });
     return;
   }
@@ -80,10 +90,14 @@ async function route(): Promise<void> {
 
   // Someone who arrived on an invite link never saw the home screen's name field, so ask
   // for one before joining rather than seating them as "Player". Anyone who has played
-  // before already has a name stored and goes straight in.
-  const name = getName() || await askName(roomId);
+  // before already has a name stored and goes straight in -- and a signed-in player is
+  // named by their account, so asking them would be asking for something they cannot
+  // change and the server would overrule anyway.
+  const signedIn = getState().account;
+  const name = signedIn?.username ?? getName() ?? '';
+  const joinAs = name || await askName(roomId);
 
-  const res = await joinRoom(roomId, name);
+  const res = await joinRoom(roomId, joinAs);
   if (!res.ok) {
     toast(res.error ?? 'Could not join that room', 'danger');
     location.hash = '';

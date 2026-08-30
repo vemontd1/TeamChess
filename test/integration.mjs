@@ -682,7 +682,10 @@ async function main() {
     await sleep(90);
 
     const after = cw.last.cards[color];
-    if (pick.piece === 'k') {
+    // Castling is the one king move that is paid for -- the rook travels too -- so it is
+    // counted with the moves that spend rather than with the free ones.
+    const castled = pick.san.startsWith('O-O');
+    if (pick.piece === 'k' && !castled) {
       kingMovesSeen++;
       if (after.played.length !== before.played) { bad = 'a king move spent a card'; break; }
     } else if (after.played.length !== before.played + 1) {
@@ -1322,6 +1325,120 @@ async function main() {
     check('but it is recorded against nobody',
       (await emitCb(guest, 'profile:me', { limit: 5 })) === null
       && (await emitCb(guest2, 'profile:me', { limit: 5 })) === null);
+  }
+
+
+  {
+    log('\n=== 29. A rematch is a different game, and says so ===');
+    const r1 = await mkClient('Re-W');
+    const ridR = await emitCb(r1, 'room:create',
+      { name: 'R', config: { teamSize: 1, moveTimerSec: 120 } });
+    const r2 = await mkClient('Re-B');
+    for (const c of [r1, r2]) await join(c, ridR);
+    await emitCb(r1, 'seat:take', { color: 'white', seatId: 0 });
+    await emitCb(r2, 'seat:take', { color: 'black', seatId: 0 });
+    r1.emit('game:start');
+    await waitFor(r1, st => st.status === 'playing');
+    const firstSeq = r1.last.gameSeq;
+    check('a started game has a number', typeof firstSeq === 'number' && firstSeq > 0,
+      String(firstSeq));
+
+    // fool's mate, so the first game really finishes
+    for (const [cli, from, to] of [
+      [r1, 'f2', 'f3'], [r2, 'e7', 'e5'], [r1, 'g2', 'g4'], [r2, 'd8', 'h4'],
+    ]) { await emitCb(cli, 'game:move', { from, to }); await sleep(90); }
+    await waitFor(r1, st => st.status === 'finished');
+    check('the first game ended', r1.last.gameOver?.reason === 'checkmate');
+    check('and its number did not change mid-game', r1.last.gameSeq === firstSeq);
+
+    r1.emit('game:rematch');
+    await waitFor(r1, st => st.status === 'playing' && st.history.length === 0);
+    await sleep(150);
+    // This is what the client keys "have I announced this result?" on. Without it a
+    // rematch replayed the previous result card and then swallowed the next one.
+    check('a rematch is a new game with a new number', r1.last.gameSeq === firstSeq + 1,
+      `${firstSeq} -> ${r1.last.gameSeq}`);
+    check('and it starts clean',
+      r1.last.gameOver === null && r1.last.history.length === 0);
+
+    // and the second game can still be won
+    for (const [cli, from, to] of [
+      [r1, 'f2', 'f3'], [r2, 'e7', 'e5'], [r1, 'g2', 'g4'], [r2, 'd8', 'h4'],
+    ]) { await emitCb(cli, 'game:move', { from, to }); await sleep(90); }
+    await waitFor(r1, st => st.status === 'finished');
+    check('the rematch can be won like any other game',
+      r1.last.status === 'finished' && r1.last.gameOver?.winner === 'black'
+      && r1.last.gameSeq === firstSeq + 1,
+      JSON.stringify(r1.last.gameOver));
+  }
+
+  {
+    log('\n=== 30. Bug reports and the admin panel ===');
+    const reporter = await mkClient('Reporter');
+    const rid = await emitCb(reporter, 'room:create',
+      { name: 'Rep', config: { mode: 'cards', moveTimerSec: 60 } });
+    await join(reporter, rid);
+
+    check('an empty report is refused',
+      (await emitCb(reporter, 'report:send', { text: '   ' })).ok === false);
+
+    const sent = await emitCb(reporter, 'report:send', {
+      text: 'The timer stopped and nobody won.',
+      context: { roomId: rid, mode: 'cards', status: 'playing', plies: 12,
+                 viewport: '390x844', route: `#/r/${rid}`,
+                 userAgent: 'test-harness', fen: 'startpos' },
+    });
+    check('a report with something in it is accepted', sent.ok === true, sent.error ?? '');
+
+    // A guest is not an admin, and neither is an ordinary account.
+    check('a guest cannot read the admin overview',
+      (await emitCb(reporter, 'admin:overview', {})) === null);
+    check('nor the reports',
+      (await emitCb(reporter, 'admin:reports', { limit: 5 })) === null);
+
+    const plain = await mkClient('Plain-User');
+    await signUp(plain);
+    check('a signed-in non-admin cannot either',
+      (await emitCb(plain, 'admin:overview', {})) === null
+      && (await emitCb(plain, 'admin:reports', {})) === null);
+
+    // Arch-W is named in ADMIN_USERS for this run.
+    const admin = await mkClient('Arch-W');
+    const who = await signUp(admin);
+    check('the admin account is flagged as one', who.account?.isAdmin === true,
+      JSON.stringify(who.account));
+
+    const overview = await emitCb(admin, 'admin:overview', {});
+    check('an admin gets the overview', overview != null && overview.games != null,
+      JSON.stringify(overview?.games?.total));
+    check('it counts games, accounts and rooms',
+      typeof overview.games.total === 'number'
+      && typeof overview.accounts === 'number' && overview.accounts >= 2
+      && typeof overview.rooms.live === 'number' && overview.rooms.live >= 1,
+      JSON.stringify({ a: overview.accounts, r: overview.rooms }));
+    check('and reports what setups people actually played',
+      Array.isArray(overview.setups) && overview.setups.every(sx =>
+        typeof sx.label === 'string' && typeof sx.count === 'number'),
+      JSON.stringify(overview.setups.slice(0, 2)));
+
+    const reports = await emitCb(admin, 'admin:reports', { limit: 50 });
+    check('an admin sees the report that was filed',
+      Array.isArray(reports) && reports.some(r => r.text.includes('nobody won')),
+      String(reports?.length));
+
+    const mine = reports.find(r => r.text.includes('nobody won'));
+    check('and it carried its context',
+      mine.context.roomId === rid && mine.context.mode === 'cards'
+      && mine.context.plies === 12 && mine.context.viewport === '390x844',
+      JSON.stringify(mine.context));
+    check('it is filed under the reporter', mine.reporter === 'Reporter', mine.reporter);
+    check('and starts unresolved', mine.resolved === false);
+
+    const done = await emitCb(admin, 'admin:report-resolve', { id: mine.id, resolved: true });
+    check('an admin can mark it done', done?.resolved === true);
+    check('a non-admin cannot',
+      (await emitCb(plain, 'admin:report-resolve',
+        { id: mine.id, resolved: false })) === null);
   }
 
   log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);

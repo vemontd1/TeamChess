@@ -348,3 +348,50 @@
   text-transform: uppercase;
   pointer-events: none;
 }
+
+/* ---- premoves ----------------------------------------------------------------
+   A move chosen while the opponent is still thinking. Drawn in a cool blue so it
+   can never be confused with the amber the live turn uses: what is queued and what
+   is legal now are different claims, and the board should not mix them. */
+
+.mk-pre {
+  background: rgba(108, 156, 220, 0.3);
+  box-shadow: inset 0 0 0 2px rgba(126, 176, 240, 0.6);
+}
+.mk-pre-to { background: rgba(108, 156, 220, 0.42); }
+
+.mk-pre-move::after {
+  content: '';
+  position: absolute;
+  inset: 34%;
+  border-radius: 50%;
+  background: rgba(126, 176, 240, 0.45);
+}
+.mk-pre-capture {
+  box-shadow: inset 0 0 0 3px rgba(126, 176, 240, 0.55);
+  border-radius: 50%;
+}
+
+/* The board says it will take a queued move, without competing with the live glow. */
+.board-premove .board-frame {
+  box-shadow:
+    0 0 0 1px rgba(108, 156, 220, 0.3),
+    0 0 0 8px #14120F,
+    0 0 0 9px rgba(108, 156, 220, 0.16),
+    0 28px 70px rgba(0, 0, 0, 0.7);
+}
+
+/* ---- touch -------------------------------------------------------------------
+   Without this the browser claims a touch drag as a page pan and the pointer events
+   never arrive: on a phone the board scrolled the page instead of moving a piece,
+   which made the game unplayable rather than merely awkward.
+
+   `none` rather than `manipulation`: the board must not pan *or* zoom under a finger,
+   and both gestures start the same way. The page itself still scrolls everywhere else. */
+
+.board,
+.board-squares,
+.board-pieces,
+.board-markers { touch-action: none; }
+
+.pc { touch-action: none; }

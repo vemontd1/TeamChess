@@ -14,15 +14,21 @@ import {
 } from './room.js';
 import { handView, canSacrifice, sacrificeReadyIn, canCastle, TUNING } from './cards.js';
 import { initArchive, saveGame, listGames, loadGame, toPgn } from './archive.js';
-import { initProfiles, touchProfile, recordGame, profileView } from './profiles.js';
 import {
-  initAccounts, register, login, accountFromSession,
+  initProfiles, touchProfile, recordGame, profileView, profileCount,
+} from './profiles.js';
+import {
+  initAccounts, register, login, accountFromSession, accountCount,
 } from './accounts.js';
+import {
+  initReports, fileReport, listReports, setResolved, openCount, MAX_REPORT_CHARS,
+} from './reports.js';
 import type {
   Color, CreatePayload, JoinPayload, SeatTakePayload, SeatBotPayload,
   MovePayload, TakebackRespondPayload, DrawRespondPayload, JoinResult, You,
   ChatSendPayload, MarkTogglePayload, GameResult, GameSummary, ProfileView,
   Account, AuthPayload, AuthResult, SessionPayload,
+  BugReport, ReportPayload, AdminOverview,
 } from './types.js';
 
 const TAKEBACK_WINDOW_MS = 20_000;
@@ -109,6 +115,66 @@ function creditPlayers(room: Room, summary: GameSummary): void {
       }
     }
   }
+}
+
+/**
+ * Everything the admin panel shows, computed on demand from the archive index and the
+ * stores rather than from a separate stream of counters.
+ *
+ * There is no analytics pipeline here and there does not need to be one: the archive
+ * already holds every finished game, and a few hundred summaries add up faster than the
+ * request that asked for them. If that ever stops being true, the shape of this function
+ * is what a rolling aggregate would replace.
+ */
+function adminOverview(): AdminOverview {
+  const games = listGames(1000);
+  const byMode: Record<string, number> = {};
+  const byResult: Record<string, number> = {};
+  const byReason: Record<string, number> = {};
+  const setups = new Map<string, number>();
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  let plies = 0;
+  let last7 = 0;
+  for (const g of games) {
+    byMode[g.mode] = (byMode[g.mode] ?? 0) + 1;
+    byResult[g.result] = (byResult[g.result] ?? 0) + 1;
+    byReason[g.reason] = (byReason[g.reason] ?? 0) + 1;
+    plies += g.plies;
+    if (g.finishedAt >= weekAgo) last7++;
+
+    const c = g.config;
+    const label = c
+      ? `${c.mode === 'cards' ? 'Cards' : `Team ${c.teamSize}v${c.teamSize}`}`
+        + ` · ${c.moveTimerSec ? `${c.moveTimerSec}s` : 'no clock'}`
+        + `${c.mode === 'cards' ? '' : c.skipEmptySeats ? ' · skip empty' : ' · all seats'}`
+        + `${c.allowTakeback ? '' : ' · no takebacks'}`
+      : 'unknown';
+    setups.set(label, (setups.get(label) ?? 0) + 1);
+  }
+
+  let live = 0;
+  let playing = 0;
+  for (const room of rooms.values()) {
+    live++;
+    if (room.status === 'playing') playing++;
+  }
+
+  return {
+    games: {
+      total: games.length,
+      byMode, byResult, byReason,
+      avgPlies: games.length > 0 ? Math.round(plies / games.length) : 0,
+      last7,
+    },
+    setups: [...setups].map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count).slice(0, 12),
+    accounts: accountCount(),
+    profiles: profileCount(),
+    reportsOpen: openCount(),
+    rooms: { live, playing },
+    recent: games.slice(0, 25),
+  };
 }
 
 function broadcast(room: Room): void {
@@ -230,8 +296,14 @@ function canStart(room: Room): boolean {
   return occupiedCount(room.white) >= 1 && occupiedCount(room.black) >= 1;
 }
 
+// Reports write a file each, so they get the same treatment chat does: a small burst,
+// then a slow refill.
+const REPORT_BURST = 5;
+const REPORT_REFILL_MS = 20_000;
+
 interface SockData {
   roomId?: string; token?: string; name?: string;
+  reportTokens?: number; reportAt?: number;
   /** The signed-in account on this socket, if any. Guests leave it undefined. */
   account?: Account;
   chatTokens?: number; chatAt?: number;
@@ -489,6 +561,66 @@ io.on('connection', (socket: Socket) => {
     const limit = Number(payload?.limit);
     cb?.(profileView(data.account.id, Number.isFinite(limit) ? limit : 25));
   });
+
+  // ---- bug reports, filed from inside the app ----
+
+  /**
+   * One report. Rate limited on the same bucket chat uses, because it is the same risk:
+   * a client that can write to disk as fast as it can emit.
+   */
+  socket.on('report:send', (payload: ReportPayload | undefined,
+                            cb?: (res: { ok: boolean; error?: string }) => void) => {
+    const now = Date.now();
+    const refilled = Math.floor((now - (data.reportAt ?? 0)) / REPORT_REFILL_MS);
+    data.reportTokens = Math.min(REPORT_BURST, (data.reportTokens ?? REPORT_BURST) + refilled);
+    data.reportAt = now;
+    if ((data.reportTokens ?? 0) <= 0) {
+      cb?.({ ok: false, error: 'Too many reports just now. Try again in a minute.' });
+      return;
+    }
+    data.reportTokens!--;
+
+    const report = fileReport({
+      text: payload?.text,
+      context: payload?.context,
+      accountId: data.account?.id ?? null,
+      reporter: data.account?.username ?? data.name ?? 'Guest',
+    });
+    if (!report) {
+      cb?.({ ok: false, error: `Say a little about what went wrong (up to ${MAX_REPORT_CHARS} characters).` });
+      return;
+    }
+    console.log(`[reports] ${report.id} from ${report.reporter}`);
+    cb?.({ ok: true });
+  });
+
+  // ---- admin ----
+
+  /**
+   * Admin is re-derived from the socket's account on every call, never trusted from the
+   * client and never cached on the socket. A panel that asks nicely gets nothing.
+   */
+  const asAdmin = (): Account | null =>
+    data.account?.isAdmin ? data.account : null;
+
+  socket.on('admin:overview', (_payload: unknown,
+                               cb?: (res: AdminOverview | null) => void) => {
+    cb?.(asAdmin() ? adminOverview() : null);
+  });
+
+  socket.on('admin:reports', (payload: { limit?: number } | undefined,
+                              cb?: (res: BugReport[] | null) => void) => {
+    if (!asAdmin()) { cb?.(null); return; }
+    const limit = Number(payload?.limit);
+    cb?.(listReports(Number.isFinite(limit) ? limit : 100));
+  });
+
+  socket.on('admin:report-resolve',
+    (payload: { id?: string; resolved?: boolean } | undefined,
+     cb?: (res: BugReport | null) => void) => {
+      if (!asAdmin() || typeof payload?.id !== 'string') { cb?.(null); return; }
+      cb?.(setResolved(payload.id, payload.resolved !== false));
+    });
 
   // ---- team coordination: chat and marks, both team-scoped ----
 
@@ -770,6 +902,7 @@ if (fs.existsSync(clientDist)) {
 initArchive();
 initProfiles();
 initAccounts();
+initReports();
 
 const PORT = Number(process.env.PORT) || 3001;
 httpServer.listen(PORT, () => {

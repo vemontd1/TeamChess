@@ -51,6 +51,7 @@ function summarise(game: ArchivedGame): GameSummary {
     id: game.id,
     roomId: game.roomId,
     mode: game.config.mode,
+    config: game.config,
     finishedAt: game.finishedAt,
     plies: game.history.length,
     white: game.white,

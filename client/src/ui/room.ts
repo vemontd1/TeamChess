@@ -8,8 +8,11 @@ import {
 import { sfx, setSoundEnabled, unlockAudio } from '../audio/sfx';
 import { showTurnAlert, clearTurnAlert } from './turnAlert';
 import { showBloodBurst, clearBloodBurst } from './bloodBurst';
+import { openBugReport } from './reportBug';
 import { avatarHtml } from './avatar';
-import { CardHand, reachOf, typesForKind, EMERGENCY_CARD_ID } from './cardHand';
+import {
+  CardHand, reachOf, heldReach, typesForKind, EMERGENCY_CARD_ID,
+} from './cardHand';
 import { effectsEnabled, toggleMotion, systemPrefersReduced, getMotionPref, motionLevel } from '../state/motion';
 import * as net from '../net/socket';
 import {
@@ -32,24 +35,40 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
         <button class="btn btn-sm btn-icon btn-ghost" id="flip" title="Flip board (F)">⇅</button>
         <button class="btn btn-sm btn-icon btn-ghost" id="sound" title="Toggle sound (M)">♪</button>
         <button class="btn btn-sm btn-icon btn-ghost" id="fx" title="Toggle visual effects (E)">✦</button>
+        <button class="btn btn-sm btn-icon btn-ghost" id="bug"
+                title="Report a problem — the room and position go with it">⚑</button>
         <span id="who"></span>
         <button class="btn btn-sm btn-ghost" id="exit">Exit</button>
+        <button class="btn btn-sm btn-icon btn-ghost" id="menu"
+                aria-label="Open the side panels" aria-expanded="false">☰</button>
       </header>
 
       <div class="sr-only" id="live" role="status" aria-live="polite"></div>
 
       <div class="room-layout">
-        <div class="side-column" id="left"><div class="roster-stack" id="rosters"></div></div>
+        <!-- display:contents on a desktop, so these two stay grid items in their own
+             columns; a single off-canvas drawer on a phone, where there is no room for
+             either and no way to reach them except by asking. -->
+        <div class="side-wrap" id="sidewrap">
+          <div class="drawer-head">
+            <span>Panels</span>
+            <span id="drawer-exit"></span>
+            <button class="btn btn-sm btn-ghost" id="drawer-close">Close</button>
+          </div>
+          <div class="side-column" id="left"><div class="roster-stack" id="rosters"></div></div>
+          <div class="side-column" id="right"></div>
+        </div>
 
         <div class="board-column">
-          <section class="panel edge" style="width:100%"><div class="tray" id="tray"></div></section>
+          <div id="phone-top"></div>
+          <section class="panel edge tray-panel" style="width:100%">
+            <div class="tray" id="tray"></div></section>
           <div id="board"></div>
           <div id="cards"></div>
           <div class="btn-row" id="controls"></div>
         </div>
-
-        <div class="side-column" id="right"></div>
       </div>
+      <div class="drawer-scrim" id="scrim" hidden></div>
     </div>`;
 
   // Who you are, and the way to your own games -- reachable from the lobby rather than
@@ -67,6 +86,11 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       : `<a class="btn btn-sm btn-ghost" href="#/login">Log in</a>`;
   };
   paintWho();
+
+  const shell = root.querySelector<HTMLElement>('.shell')!;
+  const sideWrap = root.querySelector<HTMLElement>('#sidewrap')!;
+  const phoneTop = root.querySelector<HTMLElement>('#phone-top')!;
+  const scrim = root.querySelector<HTMLElement>('#scrim')!;
 
   const boardHost = root.querySelector<HTMLElement>('#board')!;
   const leftCol = root.querySelector<HTMLElement>('#left')!;
@@ -89,6 +113,49 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   // is right on a laptop and absurd on a 27-inch monitor, where it left the game sitting
   // in the middle of the display with the rest unused.
 
+  /**
+   * The phone layout.
+   *
+   * A phone has room for the board and the clock and nothing else, so everything that is
+   * read between moves rather than during one -- rosters, chat, the move list, stats, the
+   * card table -- goes behind a drawer, and the clock moves out of the side column it
+   * lives in on a desktop and sits above the board where it can still be seen.
+   *
+   * The breakpoint is matched in CSS as well, but the class is what the two agree on:
+   * one source of truth for "is this a phone", set here and read there.
+   */
+  const phoneQuery = window.matchMedia('(max-width: 780px)');
+  let onPhone = phoneQuery.matches;
+  let drawerOpen = false;
+
+  const setDrawer = (open: boolean): void => {
+    drawerOpen = open && onPhone;
+    shell.classList.toggle('drawer-open', drawerOpen);
+    scrim.hidden = !drawerOpen;
+    root.querySelector('#menu')!.setAttribute('aria-expanded', String(drawerOpen));
+  };
+
+  const applyLayout = (): void => {
+    onPhone = phoneQuery.matches;
+    shell.classList.toggle('is-phone', onPhone);
+    if (!onPhone) setDrawer(false);
+
+    // The clock is the one panel that has to stay on screen, so it changes parents rather
+    // than being duplicated: one TimerRing, one countdown, wherever it is standing.
+    const wanted = onPhone ? phoneTop : rightCol;
+    if (timerPanel.parentElement !== wanted) wanted.prepend(timerPanel);
+
+    // Exit moves rather than being hidden and rebuilt: the header has no room for it on a
+    // phone, and a way out of the room that only exists on a desktop is not a way out.
+    const exitBtn = root.querySelector<HTMLElement>('#exit')!;
+    const exitHome = onPhone
+      ? root.querySelector<HTMLElement>('#drawer-exit')!
+      : root.querySelector<HTMLElement>('.topbar')!;
+    if (exitBtn.parentElement !== exitHome) exitHome.appendChild(exitBtn);
+
+    sizeBoard();
+  };
+
   const uiScale = (): number => {
     const v = parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue('--ui'));
@@ -101,6 +168,20 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   const sizeBoard = (): void => {
     const ui = uiScale();
     const w = window.innerWidth;
+
+    // On a phone the board takes the width it is given and the height is whatever the
+    // clock, the hand and the button row leave -- all of which are measured, so adding a
+    // row can never quietly push the board off the bottom.
+    if (onPhone) {
+      const pad = 20;
+      const topbar = heightOf(root.querySelector<HTMLElement>('.topbar'));
+      const others = heightOf(phoneTop) + heightOf(cardsHost) + heightOf(controls);
+      const availH = window.innerHeight - topbar - others - pad * 2 - 24;
+      const size = Math.max(240, Math.min(w - pad, availH));
+      boardHost.style.setProperty('--board-size', `${Math.round(size)}px`);
+      return;
+    }
+
     const stacked = w <= 1180;   // the side columns drop under the board below this
 
     // width: the page padding and, on a wide screen, both side columns and the gaps
@@ -151,6 +232,14 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     onIllegal: () => sfx.illegal(),
     onPickup: () => sfx.pickup(),
     requestPromotion: promotionDialog,
+    onPremove: move => {
+      premove = move;
+      if (move) {
+        sfx.pickup();
+        announce(`Move queued: ${move.from} to ${move.to}. It plays the moment `
+          + 'your turn opens.');
+      }
+    },
     onMark: square => {
       const s = getState();
       if (!isSeated(s)) {
@@ -166,6 +255,45 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       net.toggleMark(square);
     },
   });
+
+  /**
+   * The move queued for a turn that has not arrived.
+   *
+   * Held here rather than in the store because it is not shared state and never survives
+   * the room: it is one player's intention about the next few seconds.
+   */
+  let premove: { from: string; to: string } | null = null;
+  let firingPremove = false;
+
+  /**
+   * Play the queued move the instant the turn opens.
+   *
+   * The server is still the judge. A premove is chosen against a position the opponent
+   * was about to change, so it is often no longer legal -- and in cards mode the hand it
+   * was chosen with may have been dealt into since. A refusal is therefore expected and
+   * not an error: the move is simply dropped and the player told, with the turn still
+   * theirs to use.
+   */
+  const firePremove = async (): Promise<void> => {
+    const queued = premove;
+    if (!queued || firingPremove) return;
+    firingPremove = true;
+    premove = null;
+    board.clearPremove(false);
+
+    const s = getState();
+    const cardId = isCardsMode(s) ? (cardHand.selection() ?? undefined) : undefined;
+    const ok = await net.sendMove({ from: queued.from, to: queued.to, cardId });
+    firingPremove = false;
+
+    if (ok) {
+      cardHand.clearSelection();
+      return;
+    }
+    sfx.illegal();
+    toast('Your queued move is no longer playable');
+    announce('The queued move could not be played. It is still your turn.');
+  };
 
   const timer = new TimerRing();
 
@@ -250,9 +378,33 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   leftCol.append(chat.el, cardHand.infoEl);
   rightCol.append(timerPanel, movesPanel, statsPanel);
 
+  // Only now: `applyLayout` moves the clock between columns, so it cannot run until the
+  // panel it moves exists. Calling it earlier reached `timerPanel` in its temporal dead
+  // zone, and the ReferenceError took the whole room down with it -- an empty page with a
+  // header, which is a far louder failure than the layout it was trying to arrange.
+  applyLayout();
+  phoneQuery.addEventListener('change', applyLayout);
+
+  root.querySelector('#menu')!.addEventListener('click', () => {
+    setDrawer(!drawerOpen);
+    sfx.click();
+  });
+  root.querySelector('#drawer-close')!.addEventListener('click', () => setDrawer(false));
+  scrim.addEventListener('click', () => setDrawer(false));
+
   let takebackHost: HTMLElement | null = null;
   let tbRaf = 0;
-  let gameOverShown = false;
+  /**
+   * The game whose result has already been announced.
+   *
+   * A boolean could not survive a rematch. `onGameStart` cleared it and then `setState`
+   * re-rendered synchronously -- while `s.room` was still the *previous*, finished game,
+   * because the new `room:state` had not arrived yet -- so the old result card was shown
+   * a second time, and the flag it set then swallowed the next game's result entirely.
+   * Keying on the game itself makes both impossible: the stale render is for a game that
+   * has been announced, and the next game has a number nothing has announced yet.
+   */
+  let gameOverShownFor: number | null = null;
   let lastHistoryLen = 0;
   let lastStatus: string | null = null;
   let myTurnAnnounced = false;
@@ -288,7 +440,6 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   });
 
   net.onGameStart(() => {
-    gameOverShown = false;
     myTurnAnnounced = false;
     // a new game is not the old one's archive, and it is not being reviewed either
     setState({ archived: null, reviewPly: null });
@@ -380,6 +531,17 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       s.you?.seat ? (s.you.seat.color === 'white' ? 'w' : 'b') : null);
     boardHost.classList.toggle('board-reviewing', !shown.live);
 
+    // Queueing a reply is offered while the opponent thinks: your seat, a live game, the
+    // live position, and nothing else already waiting on you.
+    const canQueue = shown.live
+      && isSeated(s)
+      && room.status === 'playing'
+      && !isMyTurn(s)
+      && !room.pendingTakeback
+      && room.activeColor !== s.you?.seat?.color;
+    board.setPremoveEnabled(canQueue);
+    boardHost.classList.toggle('board-premove', canQueue);
+
     // marks describe the live position, so they come off a reviewed one
     board.setMarks(shown.live ? s.marks : []);
 
@@ -397,6 +559,9 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     if (isCardsMode(s)) {
       cardHand.render(s.hand, room.cards, s.you?.seat?.color ?? null);
       applyReach();
+      // Off turn the board is told what the hand *holds* rather than what it can play:
+      // "if I have the necessary cards, let me queue the move".
+      if (!isMyTurn(s)) board.setAllowedTypes(heldReach(s.hand));
       // Castling costs a Rook card here, so the board is told whether one can be paid --
       // otherwise it would offer a castle the server is about to refuse.
       board.setCastlingAllowed(s.hand?.canCastle !== false);
@@ -447,6 +612,9 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     // Your move: screen bloom + board pulse + chime, once on the transition into
     // your turn. Not fired on the very first render after joining, which would
     // announce a turn the player has been sitting in the whole time.
+    // The turn is open and something was waiting for it.
+    if (isMyTurn(s) && shown.live && premove && !firingPremove) void firePremove();
+
     if (isMyTurn(s)) {
       if (!myTurnAnnounced) {
         myTurnAnnounced = true;
@@ -492,8 +660,8 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       lastHistoryLen = room.history.length; // a takeback rewound the list
     }
 
-    if (room.status === 'finished' && !gameOverShown) {
-      gameOverShown = true;
+    if (room.status === 'finished' && gameOverShownFor !== room.gameSeq) {
+      gameOverShownFor = room.gameSeq;
       showGameOver(room, isHost, s.archived?.id ?? null);
       announce(gameOverLine(room));
       if (s.soundOn) playEndgame(room, s.you?.seat?.color ?? null);
@@ -768,6 +936,10 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     setTimeout(() => toast('Effects are gentle to match your system setting — press E for full fire'), 1400);
   }
 
+  // A bug is most reportable from the room it happened in, which is also the only place
+  // the report can pick up the position and the game it happened in.
+  root.querySelector('#bug')!.addEventListener('click', () => openBugReport());
+
   root.querySelector('#exit')!.addEventListener('click', onLeave);
 
   const onKey = (e: KeyboardEvent): void => {
@@ -783,7 +955,17 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       if (e.key === 'Home') { e.preventDefault(); step(0); return; }
       if (e.key === 'End') { e.preventDefault(); step(null); return; }
     }
-    if (e.key === 'Escape' && isReviewing(getState())) { e.preventDefault(); step(null); return; }
+    if (e.key === 'Escape') {
+      if (drawerOpen) { e.preventDefault(); setDrawer(false); return; }
+      if (isReviewing(getState())) { e.preventDefault(); step(null); return; }
+      if (premove) {
+        e.preventDefault();
+        premove = null;
+        board.clearPremove(false);
+        toast('Queued move cleared');
+        return;
+      }
+    }
 
     if (e.key === 'f' || e.key === 'F') flip();
     if (e.key === 'm' || e.key === 'M') toggleSound();
@@ -815,6 +997,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     cancelAnimationFrame(tbRaf);
     cancelAnimationFrame(drawRaf);
     window.removeEventListener('resize', sizeBoard);
+    phoneQuery.removeEventListener('change', applyLayout);
     window.removeEventListener('keydown', onKey);
   };
 }

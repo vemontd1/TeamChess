@@ -159,6 +159,13 @@ export interface PendingDraw {
 
 export interface RoomState {
   id: string;
+  /**
+   * Which game this is in this room, counting from one.
+   *
+   * A rematch resets everything else, so this is the only thing that tells two games
+   * apart -- and "have I already announced this result?" has to mean *this* result.
+   */
+  gameSeq: number;
   status: Status;
   fen: string;
   turn: Color;
@@ -196,6 +203,12 @@ export interface Account {
   id: string;
   username: string;
   createdAt: number;
+  /**
+   * Set from the `ADMIN_USERS` environment variable, never from anything a client sends
+   * and never stored on the account -- so admin is a property of the deployment rather
+   * than of a row somebody might be able to edit.
+   */
+  isAdmin?: boolean;
 }
 
 export interface AuthResult {
@@ -222,6 +235,8 @@ export interface GameSummary {
   id: string;
   roomId: string;
   mode: GameMode;
+  /** The room's settings, so a listing can report what people actually play. */
+  config?: RoomConfig;
   finishedAt: number;
   plies: number;
   white: string[];
@@ -286,6 +301,56 @@ export interface ProfileView {
    * year of play would otherwise show a heatmap that quietly emptied from the left.
    */
   activity: Record<string, number>;
+}
+
+// --- bug reports ---
+
+/** What the client knew when a report was filed. Every field is optional by nature. */
+export interface ReportContext {
+  route: string | null;
+  roomId: string | null;
+  mode: GameMode | null;
+  gameSeq: number | null;
+  status: string | null;
+  fen: string | null;
+  plies: number | null;
+  userAgent: string | null;
+  viewport: string | null;
+}
+
+export interface BugReport {
+  id: string;
+  at: number;
+  text: string;
+  /** The name the reporter was playing under; an account id when they had one. */
+  reporter: string;
+  accountId: string | null;
+  context: ReportContext;
+  resolved: boolean;
+  resolvedAt?: number;
+}
+
+export interface ReportPayload { text?: string; context?: unknown; }
+
+// --- admin ---
+
+/** Everything the admin panel shows, computed from the archive and the stores. */
+export interface AdminOverview {
+  games: {
+    total: number;
+    byMode: Record<string, number>;
+    byResult: Record<string, number>;
+    byReason: Record<string, number>;
+    avgPlies: number;
+    last7: number;
+  };
+  /** Room configurations, most used first. */
+  setups: Array<{ label: string; count: number }>;
+  accounts: number;
+  profiles: number;
+  reportsOpen: number;
+  rooms: { live: number; playing: number };
+  recent: GameSummary[];
 }
 
 export interface Seat { color: Color; seatId: number; }

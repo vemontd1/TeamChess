@@ -1,10 +1,10 @@
 import { Chess } from 'chess.js';
-import { pickMove, pieceValue, type MoveStyle } from './bots.js';
+import { pickMove, rankMoves, pieceValue, type MoveStyle } from './bots.js';
 import {
   createCards, cardsPublic, drawPerTurnFor, drawCards, drawBonus, refreshEmergency,
   resolveSpend, resolveSacrifice, commitSpend, snapshotCards, movableTypes, cardCovers,
   FREE_PIECE, extinctTypes, replaceExtinct, cycleForPlayable, mulligan as mulliganCards,
-  aliveTypeCount, handCapFor, canCastle,
+  aliveTypeCount, handCapFor, canCastle, canSacrifice, chooseSacrificeCards,
   type CardsState, type Spend,
 } from './cards.js';
 import type {
@@ -71,6 +71,15 @@ export interface Room {
   history: HistoryEntry[];
   frames: PlyFrame[];
   gameOver: GameOver | null;
+  /**
+   * Which game this is, counting from one.
+   *
+   * A rematch resets everything else about a room, so nothing else on the wire tells the
+   * two games apart -- and a client that says "have I already announced this result?"
+   * needs to mean *this* result, not "a result". Without it a rematch replays the
+   * previous game's result card and then swallows the next one.
+   */
+  gameSeq: number;
   /** The position the current game began from -- the archive records where it started. */
   startFen: string;
   /** Set once this game has been written to the archive, so it is never written twice. */
@@ -165,6 +174,7 @@ export function createRoom(config: RoomConfig): Room {
     history: [],
     frames: [],
     gameOver: null,
+    gameSeq: 0,
     startFen: new Chess().fen(),
     archived: false,
     cards: null,
@@ -542,7 +552,20 @@ export function useMulligan(room: Room, color: Color): boolean {
   const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
   if (turn !== color) return false;
   const side = room.cards[color];
-  if (!mulliganCards(side)) return false;
+
+  // The fresh hand is dealt against the board as it stands, not against the board the
+  // game started on. Dealing the opening spread blind handed back a Knight card to a
+  // player with no knights left -- the one thing the extinction swap exists to prevent,
+  // reintroduced by the button that is supposed to rescue a bad hand.
+  if (!mulliganCards(side, {
+    extinct: extinctTypes(room.chess, color),
+    cap: handCapOf(room, color),
+  })) return false;
+
+  // and the usual end-of-deal tidying, so a mulligan cannot leave a hand that could not
+  // have arrived any other way
+  side.lastReplaced.push(...replaceExtinct(side, extinctTypes(room.chess, color)));
+  if (!room.chess.inCheck()) side.lastCycled = cycleForPlayable(side, room.chess);
   refreshEmergency(side, room.chess);
   return true;
 }
@@ -578,14 +601,66 @@ export function affordableTypes(room: Room): Set<string> | null {
 }
 
 /** Play a move for a seat that ran out of time: a uniformly random legal move. */
+/**
+ * How much better an unaffordable move has to be before a bot burns three cards for it.
+ *
+ * Roughly a rook. Below that the sacrifice costs more than it wins: three cards is most
+ * of a hand and two turns of dealing, and a bot that spends them to win a pawn has simply
+ * found a slower way to lose. Mate scores a thousand, so it always clears this.
+ */
+const BOT_SACRIFICE_GAIN = 45;
+
 export function playForcedMove(room: Room, style: MoveStyle = 'random'): ApplyResult | null {
   // Castling costs a Rook card, so the clock and the bots have to be told about it too --
   // otherwise a timeout could pick a castle the hand cannot pay for, `applyMove` would
   // refuse it, and the turn would hang on a move nobody could make.
-  const mv = pickMove(room.chess, style, affordableTypes(room) ?? undefined,
-    { allowCastle: canCastleNow(room) });
+  const allowCastle = canCastleNow(room);
+  const affordable = affordableTypes(room) ?? undefined;
+
+  // A bot in cards mode gets the sacrifice too, or it is playing a different game from
+  // the one in front of it: it would sit on a mate it could not afford and shuffle a pawn
+  // instead, which is exactly what "the bot ignores the mode" looks like from the other
+  // side of the board. The clock never does this -- a timeout must stay arbitrary, and
+  // spending a player's cards for them is not that.
+  if (style === 'greedy' && room.cards) {
+    const sacrificed = trySacrificeMove(room, affordable, allowCastle);
+    if (sacrificed) return sacrificed;
+  }
+
+  const mv = pickMove(room.chess, style, affordable, { allowCastle });
   if (!mv) return null;
   return applyMove(room, mv, { auto: style === 'random' });
+}
+
+/**
+ * Burn three cards for a move the hand could not otherwise reach, when it is worth it.
+ *
+ * The comparison is between the two pools rather than against a fixed idea of a good
+ * move: what the hand can already afford, against what it could afford if it paid. Only
+ * the gap matters, so a bot with a strong hand never sacrifices for a move it could have
+ * played anyway.
+ */
+function trySacrificeMove(room: Room, affordable: Set<string> | undefined,
+                          allowCastle: boolean): ApplyResult | null {
+  const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
+  const side = room.cards![turn];
+  if (!canSacrifice(side, room.history.length)) return null;
+
+  const canPay = rankMoves(room.chess, 'greedy', affordable, { allowCastle });
+  const anything = rankMoves(room.chess, 'greedy', undefined, { allowCastle: true });
+  const best = anything[0];
+  if (!best) return null;
+
+  const bestAffordable = canPay[0]?.score ?? -Infinity;
+  if (best.score - bestAffordable < BOT_SACRIFICE_GAIN) return null;
+
+  const cards = chooseSacrificeCards(side, room.chess);
+  if (!cards) return null;
+
+  return applyMove(room, {
+    from: best.from, to: best.to, promotion: best.promotion,
+    sacrificeIds: cards.map(c => c.id),
+  });
 }
 
 // ---------- team coordination ----------
@@ -690,6 +765,7 @@ export function serialize(room: Room): RoomState {
   const a = activeColor ? activeSeat(room, teamFor(room, turn)) : null;
   return {
     id: room.id,
+    gameSeq: room.gameSeq,
     status: room.status,
     fen: room.chess.fen(),
     turn,
@@ -729,6 +805,7 @@ export function resetGame(room: Room, status: 'lobby' | 'playing'): void {
   clearTakeback(room);
   clearDraw(room);
   room.chess = new Chess();
+  room.gameSeq++;
   room.startFen = room.chess.fen();
   room.archived = false;
   room.status = status;

@@ -161,6 +161,47 @@ contains would be. With four Rook cards in thirty-six and one Wild, that is a re
 and a real decision about when to spend it. The board does not offer a castle the hand
 cannot pay for, and the hand panel says why rather than leaving the king looking broken.
 
+## The Wild goes
+
+It went from four copies to one when it measured as the single biggest reason the cards
+did not constrain. It is now gone entirely, because the sacrifice took over the job it was
+left doing.
+
+Both answered the same question — *I can see the move and I hold the wrong cards* — and
+one of them answered it for free, at random, to whoever happened to draw it. The sacrifice
+answers it as a decision: three cards and a ten-ply cooldown, paid by the player who wants
+it, when they want it. Two answers to one question, one of them free, is one too many.
+
+Its copy went to the Rook, which castling had made the tightest kind in the deck.
+
+The measurement, 120 games against the same harness:
+
+| | open | moves | types | emerg | kinds |
+|---|---|---|---|---|---|
+| with one Wild | 26.2% | 72.6% | 79.3% | 0.6% | 3.66 |
+| **no Wild — shipped** | **18.8%** | 68.8% | 76.9% | 0.8% | 3.59 |
+| no Wild, from ply 50 | **9.8%** | 64.6% | 72.8% | 1.8% | — |
+
+That is a seven-point tightening for removing a single card in thirty-six, which is the
+same lesson the first sweep taught: one card that unlocks everything is worth far more
+than its share of the deck.
+
+`wild` stays in the type and in every reader. Games already archived were played with it,
+and a record that cannot describe what happened is worse than an unused branch.
+
+## The bots play the mode
+
+A bot in cards mode respected the hand — it never played a move it could not pay for — but
+it never used the sacrifice either, so it would sit on a mate it could not afford and
+shuffle a pawn instead. It now compares what it can afford against what it could afford if
+it paid, and burns three cards when the gap is worth about a rook. Mate always clears that.
+
+Its evaluation was also material-only, which meant that on the many turns offering no
+capture at all every legal move scored the same and it picked at random. It now looks one
+move ahead at whether the piece it just moved can simply be taken, plus small nudges toward
+the centre and off the back rank. Still one ply, still deliberately weak — but no longer
+aimless, which is what "the bot ignores the mode" actually looked like.
+
 ## The shipped tuning
 
 `TUNING` in `server/src/cards.ts` is the only place these live.
@@ -177,9 +218,9 @@ cannot pay for, and the hand panel says why rather than leaving the king looking
 | Pawn | 10 | 11 | **14** |
 | Knight | 7 | 8 | 8 |
 | Bishop | 7 | 8 | **7** |
-| Rook | 5 | 5 | **4** |
+| Rook | 5 | 5 | **5** |
 | Queen | 3 | 3 | **2** |
-| **Wild** | **4** | **1** | **1** |
+| **Wild** | **4** | **1** | **none** |
 | Deck total | 36 | 36 | 36 |
 
 ## A card cannot outlive its piece

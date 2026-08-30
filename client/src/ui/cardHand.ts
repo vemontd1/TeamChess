@@ -40,6 +40,23 @@ export function typesForKind(kind: CardKind): string[] {
  * This is what the board is narrowed to when no card is picked: everything the player
  * could legally set in motion right now. Picking a card narrows it further.
  */
+/**
+ * The piece types a hand *holds* a card for, ignoring whether they can move right now.
+ *
+ * `reachOf` answers "what can I move this instant", which is only meaningful on your own
+ * turn -- off turn every card is marked unplayable, so it returns nothing. A premove is
+ * chosen off turn and asks the other question: could this hand pay for that piece at all.
+ */
+export function heldReach(hand: HandState | null): Set<string> {
+  const out = new Set<string>(['k']);
+  if (!hand) return out;
+  if (hand.emergency) { for (const t of 'pnbrq') out.add(t); return out; }
+  for (const c of hand.cards) {
+    for (const t of typesForKind(c.kind)) out.add(t);
+  }
+  return out;
+}
+
 export function reachOf(hand: HandState | null): Set<string> | null {
   if (!hand) return null;
   const out = new Set<string>(['k']);

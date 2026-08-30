@@ -14,7 +14,7 @@ import {
   isEnraged, movableTypes, cardPlayable, cardCovers, refreshEmergency, resolveSpend,
   commitSpend, mulligan, cardsPublic, handView, snapshotCards, extinctTypes,
   replaceExtinct, cycleForPlayable, canSacrifice, sacrificeReadyIn, resolveSacrifice,
-  aliveTypeCount, handCapFor, canCastle,
+  aliveTypeCount, handCapFor, canCastle, chooseSacrificeCards,
   EMERGENCY_CARD_ID,
 } from '../server/src/cards.ts';
 
@@ -69,7 +69,11 @@ check('thirty-six cards per side', all.length === 36, String(all.length));
 const composed = Object.fromEntries(TUNING.deck);
 check('the tally matches the tuning',
   Object.entries(composed).every(([kind, n]) => tally[kind] === n), JSON.stringify(tally));
-check('a single wild', tally.wild === 1, String(tally.wild));
+// The Wild is gone: the sacrifice answers the same question for a real price, and two
+// answers to one question -- one of them free -- is one too many. See docs/BALANCE.md.
+check('no wilds in the deck', tally.wild === undefined, String(tally.wild));
+check('and no opening kind names one',
+  !TUNING.openingKinds.includes('wild'), TUNING.openingKinds.join(','));
 check('the opening hand is one card per piece kind', HAND === 5, String(HAND));
 check('both sides open on a full hand',
   cards.white.hand.length === HAND && cards.black.hand.length === HAND);
@@ -477,6 +481,52 @@ log('\n=== 16. Castling is the one king move that is paid for ===');
   check('paying for a castle really spends the card',
     withRook.hand.length === 1 && withRook.played[0] === 'rook',
     JSON.stringify(withRook.played));
+}
+
+log('\n=== 17. A mulligan deals against the board, not against the opening ===');
+{
+  // The bug: the rescue button handed back a Knight card to a player with no knights --
+  // the one thing the extinction swap exists to prevent, reintroduced by the fix for a
+  // bad hand.
+  const gone = new Set(['n', 'q']);
+  const side = createCards().white;
+  side.hand = [];
+  const dealt = dealOpening(side, { extinct: gone });
+  check('no card is dealt for a piece that is not on the board',
+    dealt.every(c => c.kind !== 'knight' && c.kind !== 'queen'),
+    dealt.map(c => c.kind).join(','));
+  check('the kinds that remain are still dealt',
+    dealt.some(c => c.kind === 'pawn') && dealt.some(c => c.kind === 'rook')
+    && dealt.some(c => c.kind === 'bishop'), dealt.map(c => c.kind).join(','));
+
+  const capped = createCards().white;
+  capped.hand = [];
+  check('and the deal respects the cap the army has shrunk to',
+    dealOpening(capped, { cap: 3 }).length === 3 && capped.hand.length === 3);
+
+  const m = createCards().black;
+  check('a mulligan passes both through',
+    mulligan(m, { extinct: new Set(['p']), cap: 4 }) === true
+    && m.hand.length === 4 && m.hand.every(c => c.kind !== 'pawn'),
+    m.hand.map(c => c.kind).join(','));
+}
+
+log('\n=== 18. What a bot burns for a sacrifice ===');
+{
+  // Dead cards first, then the most duplicated kind: a hand of four pawns loses less by
+  // giving one up than a hand with a single Queen does.
+  const side = bareSide('rook', 'rook', 'queen', 'pawn', 'knight');
+  const picked = chooseSacrificeCards(side, opening);
+  check('it takes exactly the cost', picked?.length === TUNING.sacrificeCost);
+  check('and takes the cards that cannot move anything first', (() => {
+    // rooks and the queen are all dead in the opening position; pawn and knight are not
+    const kinds = picked.map(c => c.kind);
+    return !kinds.includes('pawn') && !kinds.includes('knight');
+  })(), picked.map(c => c.kind).join(','));
+
+  const thin = bareSide('pawn', 'knight');
+  check('a hand short of the cost offers nothing',
+    chooseSacrificeCards(thin, opening) === null);
 }
 log(`\n${failures === 0 ? 'ALL CARD CHECKS PASSED' : `${failures} CARD CHECK(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

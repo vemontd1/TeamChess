@@ -627,3 +627,135 @@
 @media (max-width: 1180px) {
   .room-me-name { display: none; }
 }
+
+/* ============================================================
+   Phones
+   ============================================================
+   A phone has room for the board and the clock and nothing else. Everything that is
+   read *between* moves rather than during one goes behind a drawer; the clock moves
+   out of its side column and sits above the board. The `.is-phone` class is set from
+   the same media query in JS, so the two never disagree about which layout is up. */
+
+/* On a desktop this wrapper is not a box at all: its two children go straight into the
+   room grid as their own columns. `order` keeps them either side of the board. */
+.side-wrap { display: contents; }
+.drawer-head { display: none; }
+#left  { order: 1; }
+.board-column { order: 2; }
+#right { order: 3; }
+
+.drawer-scrim { display: none; }
+
+@media (max-width: 780px) {
+  .room-layout {
+    display: block;
+    padding: 10px;
+    gap: 0;
+  }
+
+  .board-column { gap: 10px; }
+
+  /* The drawer: everything that is not the board or the clock. */
+  .side-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(92vw, 400px);
+    z-index: 140;
+    padding: 12px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--bg-lift);
+    border-left: 1px solid var(--panel-edge);
+    box-shadow: -20px 0 60px rgba(0, 0, 0, 0.6);
+    transform: translateX(102%);
+    transition: transform 260ms var(--ease-out);
+  }
+  .drawer-open .side-wrap { transform: translateX(0); }
+
+  .drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .drawer-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 130;
+    background: rgba(4, 4, 6, 0.6);
+    backdrop-filter: blur(2px);
+  }
+  .drawer-scrim[hidden] { display: none; }
+
+  .side-column { min-height: 0; }
+
+  /* The captured tray is decoration next to a board that needs every pixel of height. */
+  .tray-panel { display: none; }
+
+  /* A compact header: the room code and the essentials, no labels. */
+  .topbar {
+    padding: 8px 10px;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+  .brand span { display: none; }
+  .brand b { font-size: 15px; }
+  .conn-text { display: none; }
+  .topbar .btn { padding: 6px 9px; }
+  .room-me-name { display: none; }
+
+  /* The brand is the first thing to give up space: two wrapped lines of it cost more
+     header height than the board can spare. */
+  .brand { min-width: 0; flex: 0 1 auto; }
+  .brand b {
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* The clock lies down: a ring beside a name, rather than a ring above one. Vertical
+     space is the whole budget on a phone, and the ring is the only part that has to be
+     read at a glance.
+
+     Written against `.is-phone` rather than as a bare `.timer-wrap` inside this query:
+     the base rules live in `panels.css`, which is imported after this file, so a
+     single-class selector here would lose on source order however specific the media
+     query looks. The ancestor class outranks it and does not care about order. */
+  .is-phone .timer-wrap {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 14px;
+    padding: 10px 14px;
+  }
+  .is-phone .timer-ring { width: 84px; height: 84px; flex: 0 0 auto; }
+  .is-phone .timer-num { font-size: 21px; }
+  .is-phone .timer-label { font-size: 7.5px; letter-spacing: 0.14em; }
+  .is-phone .timer-who { text-align: left; }
+  .is-phone .timer-who b { font-size: 16px; }
+  .is-phone .cards-wrap { --card-w: 56px; --card-h: 80px; }
+
+  .drawer-head { gap: 8px; }
+  .drawer-head #drawer-exit { margin-left: auto; }
+
+  .board-column { align-items: stretch; }
+  #board { align-self: center; }
+}
+
+/* The menu button is a phone control; on a desktop the panels are simply there. */
+#menu { display: none; }
+@media (max-width: 780px) { #menu { display: inline-flex; } }
