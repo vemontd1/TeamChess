@@ -158,11 +158,14 @@
 
 /* ---- the hand ---- */
 
+/* The hand and its two buttons. The gap is generous because the outermost cards lean out
+   of their own boxes, and a button tucked against a rotated corner reads as being on top
+   of it. */
 .cards-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: calc(26px * var(--ui));
   flex-wrap: wrap;
 }
 
@@ -184,35 +187,60 @@
  * A hand of cards is held as a fan, and a row of upright rectangles reads as a toolbar --
  * which is what it was called in the report that asked for this. Each card is turned by
  * its distance from the middle of the hand and dropped by the square of it, so the tops
- * describe an arc rather than a line, and they overlap slightly the way cards do.
+ * describe an arc rather than a line, and they overlap the way cards do.
  *
  * `--i` is set per card and `--n` on the hand, so the geometry is here rather than in the
  * TypeScript: the shape of a fan is a question for a stylesheet.
+ *
+ * **Written with `rotate` and `translate`, never `transform`.** Everything else a card
+ * does -- dealing in, being picked up, burning, refusing -- is a `transform`, and the
+ * individual properties compose with it instead of replacing it. Put the fan in
+ * `transform` and the deal animation flattens the hand for the length of its flight and
+ * then snaps it back into shape, which is exactly what was reported: cards arriving in a
+ * row and turning into a fan afterwards. Composed, a new card flies in already fanned and
+ * lands in its slot without a single frame out of place.
  */
 .cards-hand .card {
   --mid: calc((var(--n) - 1) / 2);
   --off: calc(var(--i, 0) - var(--mid));
-  transform:
-    rotate(calc(var(--off) * 4deg))
-    translateY(calc(var(--off) * var(--off) * 2.5px));
-  margin-inline: calc(var(--card-w) * -0.06);
+  rotate: calc(var(--off) * 4.5deg);
+  translate: 0 calc(var(--off) * var(--off) * 2.5px);
   z-index: calc(10 + var(--i, 0));
 }
 
-/* Picked up, or under the pointer: straightened and lifted clear of its neighbours, which
-   is also what makes the whole face readable at the moment it matters. */
+/*
+ * The overlap belongs *between* cards. On the outer edges it was pulling whatever sat next
+ * to the hand in over the last card -- which is how the Mulligan and Sacrifice buttons
+ * ended up sitting on top of the Queen.
+ *
+ * It also tightens as the hand grows, so a full hand of seven still leaves the buttons
+ * beside it rather than wrapping them underneath. A real hand closes up the same way.
+ */
+.cards-hand .card + .card {
+  margin-left: calc(var(--card-w) * -1 * (0.13 + max(0, var(--n) - 5) * 0.028));
+}
+
+/* Picked up, or under the pointer: straightened out of the fan and left to the lift its
+   own state already gives it, which is what makes the whole face readable at the moment
+   it matters. */
 .cards-hand .card:hover:not(.card-dead):not(.card-spent),
 .cards-hand .card:focus-visible,
 .cards-hand .card-on,
 .cards-hand .card-burn {
-  transform: rotate(0deg) translateY(-12px);
+  rotate: 0deg;
+  translate: 0 0;
   z-index: 40;
 }
 
 /* Wrapping and fanning do not mix: a second row of a fan is two fans. */
 @media (max-width: 780px) {
   .cards-hand { flex-wrap: nowrap; }
-  .cards-hand .card { --off: 0; margin-inline: calc(var(--card-w) * -0.04); }
+  .cards-hand .card { rotate: 0deg; translate: 0 0; }
+  /* Same tightening as the desktop fan, a little harder: seven 56px cards and a phone
+     are not a comfortable pair. */
+  .cards-hand .card + .card {
+    margin-left: calc(var(--card-w) * -1 * (0.10 + max(0, var(--n) - 5) * 0.06));
+  }
 }
 
 .card {
@@ -239,6 +267,8 @@
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   transition:
     transform 260ms var(--ease-out),
+    rotate 260ms var(--ease-out),
+    translate 260ms var(--ease-out),
     border-color var(--dur-ui) var(--ease-out),
     box-shadow var(--dur-ui) var(--ease-out),
     opacity var(--dur-ui) var(--ease-out),
@@ -509,7 +539,47 @@
   filter: saturate(0.2) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
 }
 
-.card-mulligan { align-self: center; }
+/*
+ * The two buttons beside the hand.
+ *
+ * A column rather than a row, at the size of a button somebody is expected to press: they
+ * were `btn-sm` in a wrapping flex row, which put two 11px chips against a fan of 120px
+ * cards -- reported, accurately, as too tiny and overlapping. They keep their own column
+ * now, so nothing they do can push into the cards.
+ */
+.cards-actions {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--ui));
+  flex: 0 0 auto;
+  align-items: stretch;
+  min-width: calc(132px * var(--ui));
+}
+
+.card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: calc(8px * var(--ui));
+  padding: calc(9px * var(--ui)) calc(13px * var(--ui));
+  font-size: calc(13px * var(--ui));
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.ca-icon {
+  width: calc(17px * var(--ui));
+  height: calc(17px * var(--ui));
+  flex: 0 0 auto;
+  display: block;
+}
+
+.card-mulligan { color: var(--text-dim); }
+.card-mulligan:hover { color: var(--text); }
+/* The loop turns once when the hand it would replace is under the pointer, which is the
+   only thing the icon has to say: these cards go back and others come round. */
+.card-mulligan:hover .ca-icon { animation: mulligan-turn 620ms var(--ease-out); }
+
+@keyframes mulligan-turn { from { rotate: 0deg; } to { rotate: 360deg; } }
 
 /* ---- the sacrifice ----------------------------------------------------------
    Three cards for one move of any piece. The button is warm rather than red: it is an
@@ -517,7 +587,6 @@
    far better than a colour could. */
 
 .card-sacrifice {
-  align-self: center;
   border-color: rgba(232, 176, 75, 0.4);
   color: #E8B04B;
 }
@@ -529,12 +598,15 @@
 }
 
 .card-sacrifice-wait {
-  align-self: center;
-  font-size: calc(11px * var(--ui));
+  font-size: calc(11.5px * var(--ui));
   color: var(--text-faint);
-  letter-spacing: 0.04em;
-  padding: 5px 0;
+  letter-spacing: 0.02em;
+  padding: calc(9px * var(--ui)) calc(13px * var(--ui));
+  border: 1px dashed rgba(232, 176, 75, 0.18);
+  border-radius: var(--radius-sm);
+  cursor: default;
 }
+.card-sacrifice-wait .ca-icon { opacity: 0.5; }
 
 /* A card on the pile: pulled down out of the hand and burning, rather than lifted the way
    a picked card is. The two selections have to be impossible to confuse, because one pays

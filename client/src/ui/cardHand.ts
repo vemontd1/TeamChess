@@ -562,24 +562,26 @@ export class CardHand {
     const parts: string[] = [];
 
     if (hand?.mulliganAvailable === true && !this.sacrificing) {
-      parts.push(`<button class="btn btn-sm card-mulligan" id="mull"
-        title="Once a game: throw this hand away and take a fresh opening hand">Mulligan</button>`);
+      parts.push(`<button class="btn card-action card-mulligan" id="mull"
+        title="Once a game: throw this hand away and take a fresh opening hand">
+        ${RECYCLE}<span>Mulligan</span></button>`);
     }
 
     if (hand?.yourTurn) {
       if (this.sacrificing) {
         const left = hand.sacrificeCost - this.sacrificeIds.length;
-        parts.push(`<button class="btn btn-sm card-sacrifice on" id="sac">
-          ${left > 0 ? `Burn ${left} more` : 'Move any piece'}</button>`);
-        parts.push(`<button class="btn btn-sm btn-ghost" id="sacoff">Cancel</button>`);
+        parts.push(`<button class="btn card-action card-sacrifice on" id="sac">
+          ${SKULL}<span>${left > 0 ? `Burn ${left} more` : 'Move any piece'}</span></button>`);
+        parts.push(`<button class="btn card-action btn-ghost" id="sacoff">
+          <span>Cancel</span></button>`);
       } else if (hand.sacrificeAvailable) {
-        parts.push(`<button class="btn btn-sm card-sacrifice" id="sac"
+        parts.push(`<button class="btn card-action card-sacrifice" id="sac"
           title="Burn ${hand.sacrificeCost} cards to move any piece you like">
-          Sacrifice ${hand.sacrificeCost}</button>`);
+          ${SKULL}<span>Sacrifice ${hand.sacrificeCost}</span></button>`);
       } else if (hand.sacrificeReadyIn > 0) {
-        parts.push(`<span class="card-sacrifice-wait"
+        parts.push(`<span class="card-action card-sacrifice-wait"
           title="The sacrifice comes back once enough of the game has passed">
-          Sacrifice in ${hand.sacrificeReadyIn}</span>`);
+          ${SKULL}<span>Sacrifice in ${hand.sacrificeReadyIn}</span></span>`);
       }
     }
 
@@ -632,6 +634,30 @@ function sacrificeMeta(cards: CardsPublic, me: CardSidePublic | null): string {
   return `<span title="Burn ${cards.sacrificeCost} cards to move any piece you like">`
     + `sacrifice costs <b>${cards.sacrificeCost}</b> cards</span>`;
 }
+
+/*
+ * The two icons on the hand's buttons.
+ *
+ * Drawn here rather than pulled from a set: two glyphs are not worth a dependency, and
+ * both want to be exactly what they are -- a skull for the sacrifice, because burning
+ * three cards to move one piece is a death in the hand, and a loop for the mulligan,
+ * because the cards go back and come round again. Single paths in `currentColor`, so
+ * each takes the colour of the button it sits in and needs no second set for the
+ * armed state.
+ */
+const SKULL = `<svg class="ca-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+  <path fill="currentColor" fill-rule="evenodd" d="M8 1.1c-3.3 0-5.9 2.5-5.9 5.5 0 1.8.9
+    3.4 2.3 4.4.3.2.4.5.4.8v1.1c0 .6.5 1.1 1.1 1.1h.6v-1.4c0-.3.2-.5.5-.5s.5.2.5.5V14h1v-1.4c0
+    -.3.2-.5.5-.5s.5.2.5.5V14h.6c.6 0 1.1-.5 1.1-1.1v-1.1c0-.3.1-.6.4-.8 1.4-1 2.3-2.6
+    2.3-4.4 0-3-2.6-5.5-5.9-5.5Zm-2.6 4.6a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2Zm5.2 0a1.6
+    1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2ZM8 9.6c.3 0 .6.3.6.6v.3H7.4v-.3c0-.3.3-.6.6-.6Z"/>
+</svg>`;
+
+const RECYCLE = `<svg class="ca-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+  <path fill="currentColor" d="M8 2.6c1.5 0 2.9.7 3.8 1.8l1-1V7H9.5l1.2-1.2A3.7 3.7 0 0 0
+    4.4 7.4a.85.85 0 1 1-1.66-.33A5.4 5.4 0 0 1 8 2.6Zm5.26 6a.85.85 0 0 1 .66 1
+    5.4 5.4 0 0 1-9 2.8l-1 1V9.7h3.3L6 10.9a3.7 3.7 0 0 0 6.26-1.6.85.85 0 0 1 1-.7Z"/>
+</svg>`;
 
 /** "knights", "knights and rooks", "knights, rooks and queens". */
 function listOf(words: string[]): string {
