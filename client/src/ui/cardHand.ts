@@ -82,6 +82,16 @@ export interface CardHandHandlers {
 
 interface Slot { id: number; kind: CardKind; playable: boolean; emergency: boolean }
 
+/**
+ * How many slots the holder always keeps, whatever is in it.
+ *
+ * The cap is seven (`TUNING.handMax` on the server), and the holder is built for a full
+ * hand at all times: a card is the same size on the turn you are holding two as on the
+ * turn you are holding seven. It also gives the buttons beside it a fixed height to match,
+ * and takes one more moving part out of the board sizing.
+ */
+const HAND_SLOTS = 7;
+
 const DEAL_STAGGER_MS = 70;
 const EXIT_MS = 420;
 
@@ -434,7 +444,10 @@ export class CardHand {
       el.style.setProperty('--i', String(i));
       this.paintCard(el, slot, hand);
     });
-    this.handEl.style.setProperty('--n', String(slots.length));
+    // The holder is always the width of a full hand, whatever is in it. Sizing the slots
+    // to the cards actually held meant every draw and every spend resized every card --
+    // reported as cards that "decrease" as the hand grows, which they did.
+    this.handEl.style.setProperty('--n', String(Math.max(slots.length, HAND_SLOTS)));
 
     if (dealt > 0 && hadHand) this.handlers.onDeal?.(dealt);
   }
@@ -443,8 +456,13 @@ export class CardHand {
     const el = document.createElement('button');
     el.type = 'button';
     el.dataset.id = String(slot.id);
+    // Two pips, opposite corners, the second turned about -- the arrangement every
+    // playing card has used for two centuries, and the thing that was missing when this
+    // read as a tile with a picture on it rather than as a card.
     el.innerHTML = `
+      <span class="card-frame" aria-hidden="true"></span>
       <span class="card-pip"></span>
+      <span class="card-pip card-pip-far" aria-hidden="true"></span>
       <span class="card-art"></span>
       <span class="card-name"></span>
       <span class="card-sheen" aria-hidden="true"></span>`;
@@ -502,8 +520,8 @@ export class CardHand {
       el.classList.contains('card-dealt') ? 'card-dealt' : '',
     ].filter(Boolean).join(' ');
 
-    el.querySelector('.card-pip')!.textContent =
-      slot.emergency ? '!' : KIND_PIP[slot.kind];
+    const pip = slot.emergency ? '!' : KIND_PIP[slot.kind];
+    el.querySelectorAll('.card-pip').forEach(p => { p.textContent = pip; });
     const art = el.querySelector('.card-art')!;
     const wantArt = slot.emergency ? 'em' : slot.kind;
     if (art.getAttribute('data-art') !== wantArt) {

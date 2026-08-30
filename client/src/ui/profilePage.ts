@@ -5,6 +5,7 @@ import { toast } from './widgets';
 import { openGameViewer } from './gameViewer';
 import { renderActivityGrid, summarise } from './activityGrid';
 import { columnChart, figure, fmtMs, fmtPct, wireCharts, type Series } from './charts';
+import { FriendsPanel } from './friends';
 import { sfx } from '../audio/sfx';
 import * as net from '../net/socket';
 import { getState, setState } from '../state/store';
@@ -159,6 +160,9 @@ function trends(games: ProfileGame[]): string {
 
 export function renderProfile(root: HTMLElement, account: Account): () => void {
   let unwire: (() => void) | null = null;
+  // Built once and moved into each redraw, so the list does not flicker or lose a
+  // half-typed name every time a game row arrives.
+  const friends = new FriendsPanel({ mode: 'follow' });
   const draw = (view: ProfileView | null, loading: boolean): void => {
     const name = view?.profile.name ?? account.username;
     const rec = view?.profile.record ?? { wins: 0, losses: 0, draws: 0 };
@@ -228,6 +232,8 @@ export function renderProfile(root: HTMLElement, account: Account): () => void {
           </div>`}
         </section>
 
+        <div id="pf-friends"></div>
+
         ${loading ? '' : trends(games)}
 
         ${played === 0 ? '' : `
@@ -254,6 +260,7 @@ export function renderProfile(root: HTMLElement, account: Account): () => void {
       </div>`;
 
     bindAppBar(root);
+    root.querySelector('#pf-friends')?.appendChild(friends.el);
     unwire?.();
     unwire = wireCharts(root);
 
@@ -289,5 +296,5 @@ export function renderProfile(root: HTMLElement, account: Account): () => void {
     draw(view, false);
   }).catch(() => { if (live) draw(getState().profile, false); });
 
-  return () => { live = false; unwire?.(); };
+  return () => { live = false; unwire?.(); friends.destroy(); };
 }

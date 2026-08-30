@@ -207,7 +207,7 @@
    into the other, which is what the overlapping fan managed to do. */
 .cards-row {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
   gap: calc(18px * var(--ui));
   flex-wrap: nowrap;
@@ -257,6 +257,7 @@
   --slot: calc((100% - (var(--n) - 1) * var(--gap)) / var(--n));
   gap: var(--gap);
   flex-wrap: nowrap;
+  justify-content: flex-start;
 }
 
 .cards-hand .card {
@@ -287,6 +288,8 @@
 
 .card {
   position: relative;
+  /* Its own container, so the face can decide what fits at the width it actually has. */
+  container-type: inline-size;
   width: var(--card-w);
   height: var(--card-h);
   flex: 0 0 auto;
@@ -330,22 +333,54 @@
 /* The corner mark. A real card mirrors it bottom-right as well, but at 66px wide that
    corner belongs to the name plate and the two collided; one mark plus the plate is
    already enough to read as a card. */
+/*
+ * The card face.
+ *
+ * Asked for as "work on cards design", and what it was missing was the two things that
+ * make a rectangle read as a playing card: a frame inset from the edge, and a rank in
+ * opposite corners with the second one turned about. Both are cheap, neither carries
+ * information the face did not already have, and together they do more than any amount of
+ * gradient could.
+ */
+.card-frame {
+  position: absolute;
+  inset: calc(4px * var(--ui));
+  border: 1px solid var(--tint-soft);
+  border-radius: 4px;
+  pointer-events: none;
+  opacity: 0.75;
+}
+.card-on .card-frame, .card:hover:not(.card-dead) .card-frame { border-color: var(--tint); }
+
 .card-pip {
   position: absolute;
-  top: 5px; left: 6px;
+  top: calc(7px * var(--ui)); left: calc(9px * var(--ui));
   font-family: var(--font-display);
-  font-size: calc(12px * var(--ui));
+  font-size: calc(13px * var(--ui));
   line-height: 1;
   font-weight: 600;
   color: var(--tint);
   opacity: 0.9;
   pointer-events: none;
 }
+@container (max-width: 100px) {
+  .card-name { display: none; }
+  .card-art { margin-bottom: 0; }
+}
+
+/* The mirrored rank: bottom-right, upside down, the way a card reads from either end. */
+.card-pip-far {
+  top: auto; left: auto;
+  right: calc(9px * var(--ui));
+  bottom: calc(7px * var(--ui));
+  rotate: 180deg;
+  opacity: 0.55;
+}
 
 .card-art {
-  width: calc(46px * var(--ui)); height: calc(46px * var(--ui));
+  width: calc(52px * var(--ui)); height: calc(52px * var(--ui));
   display: block;
-  margin-bottom: calc(9px * var(--ui));   /* clear the name plate */
+  margin-bottom: calc(7px * var(--ui));   /* clear the name plate */
   transition: transform 260ms var(--ease-out);
 }
 .card-art .pc-svg {
@@ -360,9 +395,19 @@
   text-shadow: 0 0 14px var(--tint-soft);
 }
 
+/*
+ * The name plate, when there is room for it.
+ *
+ * A full hand on a laptop puts the cards at about seventy pixels, and at that width the
+ * name and the mirrored rank were fighting over the same corner -- "KNI… И". The rank and
+ * the art already say which card this is, and the button carries the full name for a
+ * screen reader and in its tooltip either way, so below a hundred pixels the plate simply
+ * goes.
+ */
 .card-name {
   position: absolute;
-  left: 3px; right: 3px; bottom: 3px;
+  left: calc(20px * var(--ui)); right: calc(20px * var(--ui));
+  bottom: calc(7px * var(--ui));
   padding: 3px 2px;
   font-size: calc(8.5px * var(--ui));
   letter-spacing: 0.1em;
@@ -588,14 +633,17 @@
  * cards -- reported, accurately, as too tiny and overlapping. They keep their own column
  * now, so nothing they do can push into the cards.
  */
+/* As tall as the holder beside it, which is a constant height now, so the two buttons
+   split it between them and the row stops looking like an afterthought. */
 .cards-actions {
   display: flex;
   flex-direction: column;
-  justify-content: center;
   gap: calc(8px * var(--ui));
   flex: 0 0 calc(142px * var(--ui));
+  align-self: stretch;
   align-items: stretch;
 }
+.cards-actions .card-action { flex: 1 1 0; }
 
 .card-action {
   display: inline-flex;

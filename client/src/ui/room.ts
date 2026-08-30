@@ -9,6 +9,7 @@ import { sfx, setSoundEnabled, unlockAudio } from '../audio/sfx';
 import { showTurnAlert, clearTurnAlert } from './turnAlert';
 import { showBloodBurst, clearBloodBurst } from './bloodBurst';
 import { openBugReport } from './reportBug';
+import { FriendsPanel, showInvite } from './friends';
 import { avatarHtml } from './avatar';
 import {
   CardHand, reachOf, heldReach, typesForKind, EMERGENCY_CARD_ID,
@@ -65,9 +66,15 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
           <div id="phone-top"></div>
           <section class="panel edge tray-panel" style="width:100%">
             <div class="tray" id="tray"></div></section>
-          <div id="board"></div>
+          <div class="board-stage" id="stage">
+            <div id="board"></div>
+            <!-- The lobby draws over the board rather than under it: there is nothing to
+                 play yet, and the one button that matters should be where the eye already
+                 is. Dimmed and blurred, the board reads as scenery instead of a game. -->
+            <div class="board-veil" id="veil" hidden><div class="veil-inner" id="veil-in"></div></div>
+          </div>
           <div id="cards"></div>
-          <div class="constraint" id="constraint" hidden></div>
+          <div class="constraint" id="constraint"></div>
           <div class="btn-row" id="controls"></div>
         </div>
       </div>
@@ -102,6 +109,9 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   const rightCol = root.querySelector<HTMLElement>('#right')!;
   const trayEl = root.querySelector<HTMLElement>('#tray')!;
   const controls = root.querySelector<HTMLElement>('#controls')!;
+  const stage = root.querySelector<HTMLElement>('#stage')!;
+  const veil = root.querySelector<HTMLElement>('#veil')!;
+  const veilInner = root.querySelector<HTMLElement>('#veil-in')!;
   const cardsHost = root.querySelector<HTMLElement>('#cards')!;
 
   // ---- board sizing ------------------------------------------------------
@@ -178,7 +188,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
    * A subtraction cannot forget a child.
    */
   const besideBoard = (): number => {
-    const col = boardHost.parentElement;
+    const col = stage.parentElement;
     if (!col) return 0;
     // The column's own height is no use here: it is a stretched grid item, so it is as
     // tall as the row whatever is in it. What is wanted is the height of its *contents*
@@ -189,7 +199,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     const shown = kids.filter(el => el.getBoundingClientRect().height > 0);
     const gap = parseFloat(getComputedStyle(col).rowGap) || 0;
     let total = shown.length > 1 ? gap * (shown.length - 1) : 0;
-    for (const el of shown) if (el !== boardHost) total += el.getBoundingClientRect().height;
+    for (const el of shown) if (el !== stage) total += el.getBoundingClientRect().height;
     return total;
   };
 
@@ -371,14 +381,17 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
    */
   const constraintEl = root.querySelector<HTMLElement>('#constraint')!;
   const paintConstraint = (s: AppState): void => {
+    // Emptied rather than hidden: the line comes and goes with the turn, and a row that
+    // disappears takes its height with it, which moved the board every time the turn
+    // changed. Reported, fairly, as "the field size changes during the game".
+    constraintEl.classList.toggle('constraint-cards', isCardsMode(s));
     if (!isCardsMode(s) || !isMyTurn(s) || !shownPosition(s).live) {
-      constraintEl.hidden = true;
+      constraintEl.textContent = '';
       return;
     }
     const { legal, affordable } = board.countAffordable();
-    constraintEl.hidden = legal === 0;
     constraintEl.classList.toggle('constraint-tight', legal > 0 && affordable <= 2);
-    constraintEl.textContent = affordable === legal
+    constraintEl.textContent = legal === 0 ? '' : affordable === legal
       ? `Your hand covers all ${legal} legal moves`
       : `${affordable} of ${legal} legal moves your hand can pay for`;
   };
@@ -477,11 +490,23 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   gameActions.className = 'btn-row game-actions';
   timerPanel.appendChild(gameActions);
 
+  /**
+   * Friends, in the roster column: the panel that answers "who is here" is the one that
+   * should answer "who could be". Guests get nothing -- a friend list belongs to an
+   * account -- so it is only mounted for a signed-in player.
+   */
+  const friends = getState().account ? new FriendsPanel({ mode: 'invite' }) : null;
+
+  net.onInvited(inv => showInvite(inv.fromName, inv.roomId, inv.mode));
+
   rosterStack.append(whitePanel.el, blackPanel.el);
   chat.el.classList.add('panel-grow');
   // In cards mode the chat goes (a team of one has no audience) and the table takes its
   // place, so the left column stays useful in both modes.
+  // Under the rosters rather than inside them: the roster stack re-appends its two panels
+  // whenever the board is flipped, which would push anything else in it to the bottom.
   leftCol.append(chat.el);
+  if (friends) leftCol.append(friends.el);
   // Across the table from you: the opponent's cards go above the board, between the
   // captured tray and the board itself.
   boardHost.parentElement!.insertBefore(cardHand.infoEl, boardHost);
@@ -568,6 +593,11 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   });
 
   net.onHand(hand => setState({ hand }));
+
+  // Who you are in this room, refreshed with every broadcast rather than only when you
+  // asked for it. See the server's `pushYou`: leaving a seat has no acknowledgement, so a
+  // stale `you` is how a player and a bot ended up sharing a row in the roster.
+  net.onYou(you => setState({ you }));
 
   /**
    * A hand does not outlive its game.
@@ -894,15 +924,21 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       manage.push(`<button class="btn btn-sm btn-ghost" id="reset">Back to lobby</button>`);
     }
 
-    controls.innerHTML = main.join('');
-    controls.hidden = main.length === 0;
+    // In the lobby the main action is drawn over the board; in a game it sits under it.
+    const inLobby = room.status === 'lobby';
+    veil.hidden = !inLobby;
+    veilInner.innerHTML = inLobby ? main.join('') : '';
+    controls.innerHTML = inLobby ? '' : main.join('');
+    controls.hidden = inLobby || main.length === 0;
     gameActions.innerHTML = manage.join('');
     gameActions.hidden = manage.length === 0;
 
     // Bound across both rows, because which row a button landed in is a question about
     // where it reads best, not about what it does.
     const find = (sel: string): HTMLElement | null =>
-      controls.querySelector<HTMLElement>(sel) ?? gameActions.querySelector<HTMLElement>(sel);
+      controls.querySelector<HTMLElement>(sel)
+      ?? veilInner.querySelector<HTMLElement>(sel)
+      ?? gameActions.querySelector<HTMLElement>(sel);
 
     find('#start')?.addEventListener('click', () => net.startGame());
     find('#rematch')?.addEventListener('click', () => net.rematch());
@@ -1202,6 +1238,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   return () => {
     unsub();
     stopDescribing();
+    friends?.destroy();
     clearBloodBurst();
     timer.destroy();
     cardHand.destroy();

@@ -283,3 +283,16 @@ export function accountById(id: string): Account | null {
   const a = byId.get(id);
   return a ? publicOf(a) : null;
 }
+
+/**
+ * Look an account up by the name a person would type.
+ *
+ * Case-insensitive, because "alextester" and "AlexTester" are the same player as far as
+ * anybody adding them as a friend is concerned, and the store already keys on the folded
+ * form for exactly that reason.
+ */
+export function accountByName(username: string): Account | null {
+  if (!ready) initAccounts();
+  const a = byName.get((username ?? '').trim().toLowerCase());
+  return a ? publicOf(a) : null;
+}

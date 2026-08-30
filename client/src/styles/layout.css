@@ -101,7 +101,34 @@
  * therefore sizing itself from the cards. That circle resolved against the cards' natural
  * width and left a five-card hand in two thirds of the room it actually had.
  */
-.board-column > *:not(#board) { align-self: stretch; }
+.board-column > *:not(.board-stage) { align-self: stretch; }
+
+/*
+ * The board and whatever is drawn over it.
+ *
+ * The lobby has nothing to play, so it dims the board and puts the one button that
+ * matters in the middle of it -- which is where a player is already looking, and which is
+ * what was asked for in place of a Start button sitting off to one side under the board.
+ */
+.board-stage { position: relative; align-self: center; }
+
+.board-veil {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius);
+  background: rgba(10, 10, 12, 0.55);
+  backdrop-filter: blur(3px);
+  z-index: 5;
+  animation: fade 220ms var(--ease-out);
+}
+.board-veil[hidden] { display: none; }
+.veil-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.veil-inner .btn { font-size: calc(15px * var(--ui)); padding: calc(11px * var(--ui)) calc(22px * var(--ui)); }
+
+/* The button row under the board is centred, whatever is in it. */
+#controls { justify-content: center; }
 
 .side-column {
   display: flex;

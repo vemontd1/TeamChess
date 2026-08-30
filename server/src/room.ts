@@ -115,6 +115,14 @@ export interface Room {
   /** Set once this game has been written to the archive, so it is never written twice. */
   archived: boolean;
   /**
+   * Pending reaping: nobody is here, and the room goes if nobody comes back.
+   *
+   * A timer rather than an immediate delete, because the commonest reason for a room to
+   * empty is somebody refreshing their browser, and a game that vanishes in the second it
+   * takes to reload is worse than a room that lingers for a few minutes.
+   */
+  reapTimer: NodeJS.Timeout | null;
+  /**
    * Which funnel steps this room has already reached.
    *
    * The funnel counts rooms, not games, and each step at most once -- a room that starts
@@ -220,6 +228,7 @@ export function createRoom(config: RoomConfig): Room {
     gameSeq: 0,
     startFen: new Chess().fen(),
     archived: false,
+    reapTimer: null,
     funnel: {
       seated: false, started: false, firstMove: false, finished: false, rematch: false,
     },
@@ -244,6 +253,28 @@ export function isOccupied(s: InternalSeat): boolean {
 
 export function occupiedCount(team: Team): number {
   return team.seats.filter(isOccupied).length;
+}
+
+/**
+ * How many people -- actual people, connected right now -- are in this room.
+ *
+ * Bots do not count, and that is the whole point of the function. A room was kept alive
+ * by `occupiedCount`, which counts a bot as an occupant, so a room whose human left with
+ * a bot still seated could never be cleaned up: it sat in memory forever, and the player
+ * who came back to its link rejoined a game nobody was playing. A seat's token surviving a
+ * disconnect keeps a refresh working, so what is counted here is *connected* humans; the
+ * grace period that stops a refresh from reaping the room lives at the call site.
+ */
+export function liveHumans(room: Room): number {
+  const seated = (t: Team): number =>
+    t.seats.filter(s => s.token != null && s.connected).length;
+  return room.spectators.size + seated(room.white) + seated(room.black);
+}
+
+/** Anyone at all holding a seat, connected or not -- a room worth keeping for a moment. */
+export function seatedHumans(room: Room): number {
+  const seated = (t: Team): number => t.seats.filter(s => s.token != null).length;
+  return seated(room.white) + seated(room.black);
 }
 
 /**

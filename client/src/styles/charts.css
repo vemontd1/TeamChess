@@ -448,6 +448,14 @@
 
 /* ---------- the one number shown mid-game ---------- */
 
+/*
+ * One line, always the same height.
+ *
+ * It has something to say only on your own turn in cards mode, and it used to be hidden
+ * the rest of the time -- which took its height with it and moved every row under it,
+ * the board included, twice a turn. Reported, fairly, as "the field size changes during
+ * the game". It keeps its box now and simply has nothing in it.
+ */
 .constraint {
   width: 100%;
   text-align: center;
@@ -455,5 +463,8 @@
   color: var(--text-faint);
   letter-spacing: 0.02em;
   padding: 2px 0 4px;
+  min-height: calc(21px * var(--ui));
 }
+/* In team mode there is no hand to constrain, so the row is not there at all. */
+.constraint:not(.constraint-cards) { display: none; }
 .constraint-tight { color: var(--accent); }

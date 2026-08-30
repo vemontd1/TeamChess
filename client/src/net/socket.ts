@@ -2,7 +2,7 @@ import { io, type Socket } from 'socket.io-client';
 import type {
   RoomState, JoinResult, RoomConfig, Color, MovePayload, MoveFx, ChatMessage, MarkView,
   GameEnded, HandState, ProfileView, ArchivedGame, GameSummary, Account, AuthResult,
-  AdminOverview, BugReport, Insights,
+  AdminOverview, BugReport, Insights, FriendsView, FriendInvite, You,
 } from '../types';
 import { setState } from '../state/store';
 import { attachTelemetry } from './telemetry';
@@ -256,6 +256,51 @@ export function adminResolveReport(id: string, resolved: boolean): Promise<BugRe
   });
 }
 
+// ---- friends ----
+
+/**
+ * The friend list, as the server sees it right now.
+ *
+ * Null for a guest: a friend list belongs to an account, and the server says so rather
+ * than the client guessing from whether it has one.
+ */
+export function friendsList(): Promise<FriendsView | null> {
+  return new Promise(resolve => {
+    sock().emit('friends:list', {}, (res: FriendsView | null) => resolve(res ?? null));
+  });
+}
+
+export interface FriendReply { ok: boolean; error?: string; accepted?: boolean }
+
+export function addFriend(username: string): Promise<FriendReply> {
+  return new Promise(resolve => {
+    sock().emit('friends:add', { username },
+      (res: FriendReply | undefined) => resolve(res ?? { ok: false, error: 'No answer' }));
+  });
+}
+
+export function acceptFriend(id: string): Promise<FriendReply> {
+  return new Promise(resolve => {
+    sock().emit('friends:accept', { id },
+      (res: FriendReply | undefined) => resolve(res ?? { ok: false, error: 'No answer' }));
+  });
+}
+
+export function removeFriend(id: string): Promise<FriendReply> {
+  return new Promise(resolve => {
+    sock().emit('friends:remove', { id },
+      (res: FriendReply | undefined) => resolve(res ?? { ok: false, error: 'No answer' }));
+  });
+}
+
+/** Put this room on a friend's screen. Only works for a friend, and only from a room. */
+export function inviteFriend(id: string): Promise<FriendReply> {
+  return new Promise(resolve => {
+    sock().emit('friends:invite', { id },
+      (res: FriendReply | undefined) => resolve(res ?? { ok: false, error: 'No answer' }));
+  });
+}
+
 /** Where a game's PGN lives, for the download link on the review screen. */
 export function pgnUrl(id: string): string {
   return `/api/games/${encodeURIComponent(id)}/pgn`;
@@ -290,6 +335,19 @@ export function onChatHistory(fn: (m: ChatMessage[]) => void): void { bind('chat
 export function onMarks(fn: (m: MarkView[]) => void): void { bind('mark:state', fn); }
 /** Your own hand, sent per-socket -- never part of the broadcast room state. */
 export function onHand(fn: (h: HandState | null) => void): void { bind('cards:hand', fn); }
+/**
+ * Who you are in this room, sent per-socket on every broadcast.
+ *
+ * Answered only on join and on taking a seat, this went stale the moment anything else
+ * moved you -- standing up, or a bot taking the chair you left.
+ */
+export function onYou(fn: (you: You) => void): void { bind('room:you', fn); }
+/** The friend list changed: somebody accepted, or came online, or left. */
+export function onFriends(fn: (view: FriendsView) => void): void { bind('friends:state', fn); }
+/** A friend is asking you to join them. */
+export function onInvited(fn: (invite: FriendInvite) => void): void {
+  bind('friends:invited', fn);
+}
 export function onMulliganed(fn: (e: { color: Color }) => void): void {
   bind('cards:mulliganed', fn);
 }

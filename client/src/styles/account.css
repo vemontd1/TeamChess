@@ -873,3 +873,123 @@ a.btn {
   border-radius: 8px;
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
 }
+
+
+/* ---- friends ------------------------------------------------------------- */
+
+/*
+ * Three lists and a field. The dot is not the only thing carrying presence -- every row
+ * says where its friend is in words as well -- because a coloured dot is exactly the kind
+ * of information that disappears for a reader who cannot see the colour.
+ */
+.friends { padding-bottom: calc(10px * var(--ui)); }
+
+.fr-add {
+  display: flex;
+  gap: 6px;
+  padding: calc(10px * var(--ui)) calc(13px * var(--ui));
+}
+.fr-add .input { flex: 1 1 auto; min-width: 0; }
+
+.fr-group { padding: 0 calc(13px * var(--ui)); }
+.fr-group h4 {
+  font-size: calc(10px * var(--ui));
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: calc(8px * var(--ui)) 0 calc(6px * var(--ui));
+  font-family: var(--font-ui);
+  font-weight: 600;
+}
+
+.fr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+
+.fr-row {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--ui));
+  padding: calc(6px * var(--ui)) 0;
+  border-top: 1px solid rgba(232, 176, 75, 0.07);
+}
+.fr-row:first-child { border-top: 0; }
+
+.fr-name {
+  font-size: calc(13px * var(--ui));
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fr-on .fr-name { color: var(--text); }
+
+/* The dot rides the name, and the word beside it says the same thing. */
+.fr-on .fr-name::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  margin-right: 7px;
+  vertical-align: middle;
+  box-shadow: 0 0 8px rgba(111, 168, 107, 0.7);
+}
+
+.fr-where {
+  margin-left: auto;
+  font-size: calc(10.5px * var(--ui));
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.fr-act { flex: 0 0 auto; }
+.fr-wait { font-size: calc(10.5px * var(--ui)); color: var(--text-faint); }
+.fr-drop {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  line-height: 1;
+  color: var(--text-faint);
+}
+.fr-drop:hover { color: var(--danger); }
+
+.fr-empty {
+  margin: 0 0 calc(8px * var(--ui));
+  font-size: calc(11.5px * var(--ui));
+  color: var(--text-faint);
+  line-height: 1.55;
+}
+
+/* ---- an invitation, when one arrives ---- */
+
+/*
+ * Bottom-right, above everything, and it leaves on its own after half a minute. An
+ * invitation is not urgent enough to interrupt a move, and a dialog that steals the
+ * keyboard in the middle of a game would be worse than no invitation at all.
+ */
+.invite-card {
+  position: fixed;
+  right: calc(20px * var(--ui));
+  bottom: calc(20px * var(--ui));
+  z-index: 160;
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--ui));
+  padding: calc(14px * var(--ui));
+  width: min(calc(320px * var(--ui)), calc(100vw - 32px));
+  border: 1px solid var(--panel-edge-strong);
+  border-radius: var(--radius);
+  background: var(--bg-lift);
+  box-shadow: var(--shadow-panel);
+  animation: invite-in 320ms var(--ease-out);
+}
+@keyframes invite-in { from { opacity: 0; transform: translateY(12px); } }
+
+.invite-who {
+  display: flex;
+  align-items: center;
+  gap: calc(9px * var(--ui));
+  font-size: calc(12.5px * var(--ui));
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.invite-who b { color: var(--text); }
+.invite-actions { display: flex; gap: 8px; justify-content: flex-end; }

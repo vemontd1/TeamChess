@@ -322,6 +322,34 @@ export interface ProfileView {
   playedAt: number[];
 }
 
+// --- friends ---
+
+/** A friend, or someone who has asked to be one, as the other person sees them. */
+export interface FriendView {
+  id: string;
+  name: string;
+  online: boolean;
+  /** The room they are in, when they are in one -- what makes an invitation possible. */
+  roomId: string | null;
+}
+
+export interface FriendsView {
+  friends: FriendView[];
+  /** People who have asked you. */
+  incoming: FriendView[];
+  /** People you have asked. */
+  outgoing: FriendView[];
+}
+
+/** An invitation, delivered to a friend's live sockets and to nobody else. */
+export interface FriendInvite {
+  fromId: string;
+  fromName: string;
+  roomId: string;
+  mode: GameMode;
+  at: number;
+}
+
 // --- metrics ---
 
 /**

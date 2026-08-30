@@ -1551,6 +1551,34 @@ async function main() {
     check('which somebody can then join', now.ok === true && now.you?.seat?.seatId === 2,
       JSON.stringify(now.you?.seat));
 
+    // Who you are in a room is broadcast, not answered once. Standing up has no
+    // acknowledgement of its own, so a client that only learned its seat when it asked
+    // went on believing it was sitting -- and when a bot took the chair, the roster drew
+    // the bot and the "You" badge on the same row.
+    {
+      const seats = [];
+      h.on('room:you', y => seats.push(y.seat));
+      await emitCb(h, 'seat:take', { color: 'white' });
+      await sleep(200);
+      check('the room says who you are when you sit down',
+        seats.length > 0 && seats[seats.length - 1]?.color === 'white',
+        JSON.stringify(seats[seats.length - 1] ?? null));
+
+      h.emit('seat:leave');
+      await sleep(300);
+      check('and says it again when you stand up, without being asked',
+        seats[seats.length - 1] === null, JSON.stringify(seats.slice(-2)));
+
+      h.emit('seat:bot', { color: 'white', bot: true });
+      await sleep(300);
+      check('so a bot taking the chair cannot leave you seated in it',
+        seats[seats.length - 1] === null
+        && h.last.white.seats.some(x => x.kind === 'bot'),
+        JSON.stringify({ you: seats[seats.length - 1], seats: h.last.white.seats }));
+      h.emit('seat:bot', { color: 'white', bot: false, seatId: 0 });
+      await sleep(200);
+    }
+
     p2.emit('seat:bot', { color: 'black', bot: true });
     await sleep(250);
     check('a non-host cannot add bots',
@@ -1867,6 +1895,145 @@ async function main() {
         reopened?.resolved === false && (reopened.attachments?.length ?? 0) === 0,
         JSON.stringify(reopened?.attachments));
       check('but the report itself survives', reopened.text.includes('scrolls instead'));
+    }
+  }
+
+
+  {
+    log('\n=== 35. Friends, and being asked to join one ===');
+    const one = await mkClient('Fr-One');
+    const two = await mkClient('Fr-Two');
+    const guest = await mkClient('Fr-Guest');
+
+    const acc1 = await signUp(one);
+    const acc2 = await signUp(two);
+    check('two accounts to be friends with each other',
+      acc1?.account?.id != null && acc2?.account?.id != null);
+
+    check('a guest has no friend list at all',
+      (await emitCb(guest, 'friends:list', {})) === null);
+
+    // The store outlives a run, so anything these two agreed to last time is undone
+    // before the section starts: a test that only passes on an empty disk is not a test.
+    await emitCb(one, 'friends:remove', { id: acc2.account.id });
+    await emitCb(two, 'friends:remove', { id: acc1.account.id });
+
+    const nobody = await emitCb(one, 'friends:add', { username: 'not-a-real-person' });
+    check('adding somebody who does not exist says so',
+      nobody.ok === false && /No account/i.test(nobody.error ?? ''), nobody.error);
+
+    const self = await emitCb(one, 'friends:add', { username: acc1.account.username });
+    check('and you cannot befriend yourself', self.ok === false, self.error);
+
+    const asked = await emitCb(one, 'friends:add', { username: acc2.account.username });
+    check('a request can be sent by name', asked.ok === true && asked.accepted === false,
+      JSON.stringify(asked));
+
+    const twice = await emitCb(one, 'friends:add', { username: acc2.account.username });
+    check('asking twice says they have not answered', twice.ok === false, twice.error);
+
+    const listOne = await emitCb(one, 'friends:list', {});
+    const listTwo = await emitCb(two, 'friends:list', {});
+    check('it is outgoing for the asker and incoming for the asked',
+      listOne.outgoing.length === 1 && listOne.friends.length === 0
+      && listTwo.incoming.length === 1 && listTwo.friends.length === 0,
+      JSON.stringify({ one: listOne, two: listTwo }));
+    check('and it carries the name, not only the id',
+      listTwo.incoming[0].name === acc1.account.username, JSON.stringify(listTwo.incoming));
+
+    // The push: both sides are told when the list changes under them.
+    const pushed = [];
+    two.on('friends:state', v => pushed.push(v));
+
+    const accepted = await emitCb(two, 'friends:accept', { id: acc1.account.id });
+    check('accepting makes it mutual', accepted.ok === true && accepted.accepted === true);
+    await sleep(200);
+    check('and the other side is told without asking',
+      pushed.length > 0 && pushed[pushed.length - 1].friends.length === 1,
+      JSON.stringify(pushed[pushed.length - 1] ?? null));
+
+    const bothWays = await emitCb(one, 'friends:list', {});
+    check('the friendship is on both lists',
+      bothWays.friends.length === 1 && bothWays.friends[0].id === acc2.account.id
+      && bothWays.outgoing.length === 0);
+    check('a friend who is connected reads as online', bothWays.friends[0].online === true,
+      JSON.stringify(bothWays.friends[0]));
+
+    // Presence carries the room, which is what makes an invitation possible.
+    const ridF = await emitCb(one, 'room:create', { name: 'Fr', config: { teamSize: 1 } });
+    await join(one, ridF);
+    await sleep(200);
+    const withRoom = await emitCb(two, 'friends:list', {});
+    check('and where they are, once they are somewhere',
+      withRoom.friends[0].roomId === ridF, JSON.stringify(withRoom.friends[0]));
+
+    const invites = [];
+    two.on('friends:invited', inv => invites.push(inv));
+    const sent = await emitCb(one, 'friends:invite', { id: acc2.account.id });
+    await sleep(200);
+    check('a friend can be invited into the room you are in', sent.ok === true, sent.error);
+    check('and the invitation names the room, the mode and who sent it',
+      invites.length === 1 && invites[0].roomId === ridF
+      && invites[0].fromName === acc1.account.username && invites[0].mode != null,
+      JSON.stringify(invites[0] ?? null));
+
+    const stranger = await emitCb(guest, 'friends:invite', { id: acc2.account.id });
+    check('a guest cannot invite anybody', stranger.ok === false, stranger.error);
+
+    const notFriend = await mkClient('Fr-Three');
+    const acc3 = await signUp(notFriend);
+    await join(notFriend, ridF);
+    const uninvited = await emitCb(notFriend, 'friends:invite', { id: acc2.account.id });
+    check('and neither can somebody who is not on their list',
+      uninvited.ok === false && /friend/i.test(uninvited.error ?? ''), uninvited.error);
+    check('an account that never asked has an empty list',
+      (await emitCb(notFriend, 'friends:list', {})).friends.length === 0);
+
+    const removed = await emitCb(one, 'friends:remove', { id: acc2.account.id });
+    check('a friend can be removed', removed.ok === true);
+    const after = await emitCb(two, 'friends:list', {});
+    check('and it is removed from both sides at once',
+      after.friends.length === 0, JSON.stringify(after));
+    check('after which the invitation is refused too',
+      (await emitCb(one, 'friends:invite', { id: acc2.account.id })).ok === false);
+
+    // Signing out takes you off the board without closing the socket.
+    await emitCb(one, 'friends:add', { username: acc2.account.username });
+    await emitCb(two, 'friends:accept', { id: acc1.account.id });
+    one.emit('auth:logout');
+    await sleep(250);
+    const afterOut = await emitCb(two, 'friends:list', {});
+    check('signing out reads as offline to your friends',
+      afterOut.friends[0]?.online === false, JSON.stringify(afterOut.friends[0] ?? null));
+  }
+
+  {
+    log('\n=== 36. A room nobody is in does not stay ===');
+    // The server under test runs with ROOM_GRACE_MS short, so this can watch it happen.
+    const grace = Number(process.env.ROOM_GRACE_MS ?? 0);
+    if (!grace || grace > 5000) {
+      log('  SKIP  needs: ROOM_GRACE_MS=800 npm start');
+    } else {
+      const host = await mkClient('Reap-Host');
+      const ridR = await emitCb(host, 'room:create', { name: 'R', config: { teamSize: 1 } });
+      await join(host, ridR);
+      await emitCb(host, 'seat:take', { color: 'white' });
+      // A bot on the other side: this is the shape that used to keep a room alive for
+      // ever, because a bot counts as an occupant and nobody checked for people.
+      host.emit('seat:bot', { color: 'black', bot: true });
+      await sleep(200);
+      check('the room is there while somebody is in it',
+        (await fetchJson(`/api/rooms/${ridR}`))?.exists === true);
+
+      host.disconnect();
+      await sleep(grace + 600);
+      check('and is gone once the last person leaves, bot or no bot',
+        (await fetchJson(`/api/rooms/${ridR}`))?.exists === false);
+
+      const back = await mkClient('Reap-Back');
+      const res = await emitCb(back, 'room:join', { roomId: ridR, name: 'Back' });
+      check('rejoining a room that has been closed says so plainly',
+        res.ok === false && /not found/i.test(res.error ?? ''), res.error);
     }
   }
 

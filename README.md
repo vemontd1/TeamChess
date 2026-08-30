@@ -269,6 +269,21 @@ against, so a tuning change cannot pass in one place and fail in the other.
 
 `docs/METRICS.md` is the full taxonomy and what is still to come.
 
+## Friends
+
+Sign in, add somebody by the name they signed up with, and once they have accepted you can
+see when they are online, what room they are in, and pull them into yours. The panel lives
+in the roster column of a room and on your profile; an invitation arrives as a card in the
+corner with a Join button and leaves on its own after half a minute.
+
+Requests rather than a one-sided list, because the thing a friend can do is put something
+on your screen while you are in the middle of a game — and that is not an arrangement a
+stranger should be able to make by typing your name. An invitation only works from a room
+the sender is actually in, and only to somebody who has agreed to hear from them.
+
+Presence is not stored anywhere. It is a map of who has a live socket, rebuilt from nothing
+every time the server starts, because that is exactly what it means.
+
 ## Your own report
 
 Every finished game has a **Report** beside its replay — from the end-of-game card, or from
@@ -321,6 +336,11 @@ The PGN is ordinary PGN, so a game can leave this app entirely and open in anyth
 reads chess. The card mode's extras have no PGN representation; the ones that change how a
 move came about — the clock playing it, a bot playing it — are written as comments rather
 than dropped.
+
+Rooms are memory, not disk. A room is dropped a few minutes after the last person leaves —
+minutes, so that a refresh or a dropped connection does not cost you the game, and *people*
+rather than occupants, because a room whose last human left with a bot still at the board
+used to sit there for ever with nobody in it.
 
 On a host with an ephemeral filesystem — a plain container, including Railway without a
 volume attached — the archive survives restarts but not redeploys. Point `GAMES_DIR` at a

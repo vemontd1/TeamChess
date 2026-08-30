@@ -7,7 +7,8 @@ import fs from 'node:fs';
 import { Server, Socket } from 'socket.io';
 import {
   rooms, createRoom, sanitizeConfig, teamFor, activeSeat, seatByToken,
-  occupiedCount, firstFreeSeat, applyMove, undoPly, clearTimer, clearTakeback, armTurn,
+  occupiedCount, liveHumans, seatedHumans, firstFreeSeat, applyMove, undoPly, clearTimer,
+  clearTakeback, armTurn,
   playForcedMove, serialize, resetGame, channelFor, chatFor, cleanChatText,
   pushChat, toggleMark, clearMarksFor, marksFor, clearDraw, useMulligan, handCapOf,
   type Room, type TurnHooks,
@@ -28,16 +29,34 @@ import {
   initReports, fileReport, listReports, setResolved, openCount, readAttachment,
   MAX_REPORT_CHARS,
 } from './reports.js';
+import {
+  initFriends, friendsView, requestFriend, accept, unfriend, areFriends, friendIdsOf,
+  nowOnline, nowOffline, socketsOf, onlineCount, friendshipCount,
+  type FriendResult,
+} from './friends.js';
 import type {
   Color, CreatePayload, JoinPayload, SeatTakePayload, SeatBotPayload,
   MovePayload, TakebackRespondPayload, DrawRespondPayload, JoinResult, You,
   ChatSendPayload, MarkTogglePayload, GameResult, GameSummary, GameMetrics, ProfileView,
   Account, AuthPayload, AuthResult, SessionPayload,
   BugReport, ReportPayload, AdminOverview, Insights, ClientInfo,
+  FriendsView, FriendInvite,
 } from './types.js';
 
 const TAKEBACK_WINDOW_MS = 20_000;
 const DRAW_WINDOW_MS = 20_000;
+
+/**
+ * How long an empty room is kept before it is thrown away.
+ *
+ * Long enough to survive a refresh, a dropped connection or a walk to the kettle; short
+ * enough that a room nobody came back to is not still holding a seat an hour later. The
+ * timer is cancelled the moment anybody joins.
+ *
+ * Overridable so the integration suite can watch a room actually go rather than assert
+ * that a timer was scheduled and hope.
+ */
+const ROOM_GRACE_MS = Number(process.env.ROOM_GRACE_MS) || 3 * 60_000;
 
 // Chat is the one place a client can push arbitrary text at everyone else, so it gets a
 // token bucket: a burst of six is fine, sustained is one every two seconds.
@@ -272,12 +291,63 @@ function noteStart(room: Room): void {
   }
 }
 
+/**
+ * Nobody is in this room. Keep it for a few minutes, then let it go.
+ *
+ * What was here counted *occupied* seats, and a bot occupies one -- so a room whose last
+ * human left while a bot still sat at the board was never cleaned up. It stayed in memory
+ * with the game it was in the middle of, and the player whose link pointed at it was
+ * dropped straight back into a game nobody was playing. Bots do not keep a room alive.
+ */
+function reapLater(room: Room): void {
+  if (room.reapTimer) return;
+  room.reapTimer = setTimeout(() => {
+    room.reapTimer = null;
+    // Somebody came back while the clock ran; the room is theirs again.
+    if (liveHumans(room) > 0) return;
+    // Last one out: the room object is about to go, so anything worth keeping has to be
+    // copied out now -- a game abandoned in progress is still reviewable.
+    archiveIfFinished(room);
+    archiveUnfinished(room);
+    clearTimer(room);
+    clearTakeback(room);
+    clearDraw(room);
+    rooms.delete(room.id);
+    console.log(`[rooms] ${room.id} closed; ${rooms.size} left`);
+  }, ROOM_GRACE_MS);
+  room.reapTimer.unref?.();
+}
+
+function keepRoom(room: Room): void {
+  if (!room.reapTimer) return;
+  clearTimeout(room.reapTimer);
+  room.reapTimer = null;
+}
+
 function broadcast(room: Room): void {
   archiveIfFinished(room);
   noteProgress(room);
   io.to(room.id).emit('room:state', serialize(room));
+  void pushYou(room);
   void pushMarks(room);
   void pushHands(room);
+}
+
+/**
+ * Tell each member who they currently are in this room.
+ *
+ * `You` used to be answered only where it was asked for -- joining, taking a seat -- so
+ * anything that changed a seat from the outside left it stale. Leaving a seat has no
+ * acknowledgement at all, so a player who stood up still believed they were sitting: when
+ * the host then dropped a bot into the chair they had left, the roster drew the bot and
+ * the "You" badge on the same row, which is exactly how somebody came to be a player and
+ * a bot at once. It is broadcast state now, and it cannot drift.
+ */
+async function pushYou(room: Room): Promise<void> {
+  await eachMember(room, (s, token) => {
+    const name = room.spectators.get(token) ?? seatByToken(room, token)?.seat.name ?? '';
+    s.emit('room:you', youFor(room, token, name));
+  });
 }
 
 /**
@@ -300,6 +370,45 @@ async function eachMember(
 
 async function pushMarks(room: Room): Promise<void> {
   await eachMember(room, (s, token) => s.emit('mark:state', marksFor(room, token)));
+}
+
+/**
+ * Tell one or more accounts that their friend list has changed.
+ *
+ * Presence and friendship are both two-sided: accepting a request changes what two people
+ * see, and coming online changes what everyone who has you on their list sees. Rather
+ * than have clients poll, the list is pushed at whoever it just became wrong for.
+ */
+function pushFriends(...accountIds: string[]): void {
+  for (const id of new Set(accountIds)) {
+    const view = friendsView(id);
+    for (const sid of socketsOf(id)) io.to(sid).emit('friends:state', view);
+  }
+}
+
+/** Somebody signed in, moved room, or left: their friends' lists just went stale. */
+function presenceChanged(accountId: string): void {
+  pushFriends(accountId, ...friendIdsOf(accountId));
+}
+
+/**
+ * Record this socket against its account, wherever it currently is.
+ *
+ * Called on every sign-in and on entering a room, because presence is two facts -- that
+ * somebody is here, and which room they are in -- and the second changes far more often
+ * than the first.
+ */
+function joinedPresence(socket: Socket): void {
+  const data = socket.data as SockData;
+  if (!data.account) return;
+  nowOnline(data.account.id, socket.id, data.roomId ?? null);
+  presenceChanged(data.account.id);
+}
+
+function goneFromPresence(socket: Socket): void {
+  const data = socket.data as SockData;
+  nowOffline(socket.id);
+  if (data.account) presenceChanged(data.account.id);
 }
 
 /**
@@ -445,6 +554,11 @@ io.on('connection', (socket: Socket) => {
     data.token = token;
     data.name = name;
     socket.join(room.id);
+    // Somebody is here again, so the room is not going anywhere.
+    keepRoom(room);
+    // Presence carries the room as well as the person: a friend list shows where a friend
+    // is, and that is what makes "join them" possible.
+    joinedPresence(socket);
 
     if (!room.hostToken) room.hostToken = token;
 
@@ -643,6 +757,7 @@ io.on('connection', (socket: Socket) => {
       // A brand-new account gets its profile straight away, so the panel has somewhere to
       // appear rather than waiting for the first finished game.
       try { touchProfile(res.account.id, res.account.username); } catch { /* not fatal */ }
+      joinedPresence(socket);
     }
     cb?.(res);
   });
@@ -651,7 +766,10 @@ io.on('connection', (socket: Socket) => {
                                  cb?: (res: AuthResult) => void) => {
     if (!authAllowed()) { cb?.({ ok: false, error: 'Too many attempts. Wait a moment.' }); return; }
     const res = await login(payload?.username, payload?.password);
-    if (res.ok && res.account) data.account = res.account;
+    if (res.ok && res.account) {
+      data.account = res.account;
+      joinedPresence(socket);
+    }
     cb?.(res);
   });
 
@@ -661,13 +779,19 @@ io.on('connection', (socket: Socket) => {
                                          profile: ProfileView | null }) => void) => {
     const account = accountFromSession(payload?.session);
     data.account = account ?? undefined;
+    if (account) joinedPresence(socket);
     cb?.({
       account,
       profile: account ? profileView(account.id, 25) : null,
     });
   });
 
-  socket.on('auth:logout', () => { data.account = undefined; });
+  socket.on('auth:logout', () => {
+    // Signing out takes this socket off the board as far as friends are concerned, even
+    // though the socket itself stays open.
+    goneFromPresence(socket);
+    data.account = undefined;
+  });
 
   /**
    * The signed-in player's own profile and game list.
@@ -877,6 +1001,82 @@ io.on('connection', (socket: Socket) => {
     else if (payload.kind === 'drawer') session.drawerOpened++;
   });
 
+  // ---- friends ----
+
+  /**
+   * Every friend call needs an account, because a friend list belongs to one and a guest
+   * has none. The account is re-read from the socket each time rather than captured, for
+   * the same reason the admin check is: a socket can sign in and out.
+   */
+  const asAccount = (): Account | null => data.account ?? null;
+
+  socket.on('friends:list', (_payload: unknown,
+                             cb?: (res: FriendsView | null) => void) => {
+    const me = asAccount();
+    cb?.(me ? friendsView(me.id) : null);
+  });
+
+  socket.on('friends:add', (payload: { username?: string } | undefined,
+                            cb?: (res: FriendResult) => void) => {
+    const me = asAccount();
+    if (!me) { cb?.({ ok: false, error: 'Sign in to keep a friend list' }); return; }
+    const username = String(payload?.username ?? '').trim().slice(0, 24);
+    if (!username) { cb?.({ ok: false, error: 'Who?' }); return; }
+
+    const res = requestFriend(me.id, username);
+    cb?.(res);
+    // Both people's lists just changed, so both are told; the other one may be looking
+    // at their own list while this happens.
+    if (res.ok && res.otherId) pushFriends(me.id, res.otherId);
+  });
+
+  socket.on('friends:accept', (payload: { id?: string } | undefined,
+                               cb?: (res: FriendResult) => void) => {
+    const me = asAccount();
+    if (!me) { cb?.({ ok: false, error: 'Sign in first' }); return; }
+    const res = accept(me.id, String(payload?.id ?? ''));
+    cb?.(res);
+    if (res.ok && res.otherId) pushFriends(me.id, res.otherId);
+  });
+
+  socket.on('friends:remove', (payload: { id?: string } | undefined,
+                               cb?: (res: FriendResult) => void) => {
+    const me = asAccount();
+    if (!me) { cb?.({ ok: false, error: 'Sign in first' }); return; }
+    const res = unfriend(me.id, String(payload?.id ?? ''));
+    cb?.(res);
+    if (res.ok && res.otherId) pushFriends(me.id, res.otherId);
+  });
+
+  /**
+   * Put an invitation on a friend's screen.
+   *
+   * Only to a friend, and only to a room the sender is actually in: an invitation is a
+   * message from someone you have agreed to hear from, about a room they are standing in.
+   * Both halves matter -- without the first it is a way to message strangers, and without
+   * the second it is a way to send people anywhere.
+   */
+  socket.on('friends:invite', (payload: { id?: string } | undefined,
+                               cb?: (res: { ok: boolean; error?: string }) => void) => {
+    const me = asAccount();
+    const room = roomOf();
+    if (!me) { cb?.({ ok: false, error: 'Sign in first' }); return; }
+    if (!room) { cb?.({ ok: false, error: 'You are not in a room' }); return; }
+
+    const id = String(payload?.id ?? '');
+    if (!areFriends(me.id, id)) { cb?.({ ok: false, error: 'Not on your friend list' }); return; }
+
+    const invite: FriendInvite = {
+      fromId: me.id, fromName: me.username, roomId: room.id,
+      mode: room.config.mode, at: Date.now(),
+    };
+    const targets = socketsOf(id);
+    for (const sid of targets) io.to(sid).emit('friends:invited', invite);
+    cb?.(targets.length > 0
+      ? { ok: true }
+      : { ok: false, error: 'They are not online at the moment' });
+  });
+
   socket.on('chat:send', (payload: ChatSendPayload) => {
     const room = roomOf();
     const token = data.token;
@@ -1045,26 +1245,15 @@ io.on('connection', (socket: Socket) => {
   socket.on('disconnect', () => {
     const room = roomOf();
     const token = data.token;
+    goneFromPresence(socket);
     if (!room || !token) return;
     const found = seatByToken(room, token);
     if (found) found.seat.connected = false;
     else room.spectators.delete(token);
     clearMarksFor(room, token);
 
-    // drop rooms nobody is left in
-    if (room.spectators.size === 0 &&
-        occupiedCount(room.white) === 0 && occupiedCount(room.black) === 0) {
-      // last one out: the room object is about to go, so anything worth keeping has to be
-      // copied out now -- a game abandoned in progress is still reviewable
-      archiveIfFinished(room);
-      archiveUnfinished(room);
-      clearTimer(room);
-      clearTakeback(room);
-      clearDraw(room);
-      rooms.delete(room.id);
-    } else {
-      broadcast(room);
-    }
+    if (liveHumans(room) === 0) reapLater(room);
+    else broadcast(room);
   });
 });
 
@@ -1134,6 +1323,23 @@ app.get('/api/games/:id/pgn', (req, res) => {
   res.type('text/plain').send(toPgn(game));
 });
 
+/**
+ * Whether a room is still there, and how many people are in it.
+ *
+ * The room code is an invitation people paste to each other, so nothing here is secret --
+ * and a room that has been closed should say so to anything that asks, not only to a
+ * client that tries to walk into it.
+ */
+app.get('/api/rooms/:id', (req, res) => {
+  const room = rooms.get(req.params.id);
+  res.json({
+    exists: room != null,
+    status: room?.status ?? null,
+    people: room ? liveHumans(room) : 0,
+    seated: room ? seatedHumans(room) : 0,
+  });
+});
+
 app.get('/api/profile/:id', (req, res) => {
   const limit = Number(req.query.limit);
   const view = profileView(req.params.id, Number.isFinite(limit) ? limit : 25);
@@ -1155,6 +1361,7 @@ if (fs.existsSync(clientDist)) {
 initArchive();
 initInsights();
 initProfiles();
+initFriends();
 initAccounts();
 initReports();
 

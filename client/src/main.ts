@@ -101,6 +101,10 @@ async function route(): Promise<void> {
   const res = await joinRoom(roomId, joinAs);
   if (!res.ok) {
     toast(res.error ?? 'Could not join that room', 'danger');
+    // A room that cannot be joined is not somewhere to go back to. Without this the
+    // profile went on offering a room that no longer existed, and the offer was the
+    // reason people kept ending up back at it.
+    if (getState().lastRoomId === roomId) setState({ lastRoomId: null });
     location.hash = '';
     return;
   }
