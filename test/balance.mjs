@@ -21,8 +21,18 @@
 import { Chess } from 'chess.js';
 import {
   TUNING, createCards, drawCards, drawBonus, drawPerTurnFor, extinctTypes, replaceExtinct,
-  cycleForPlayable, resolveSpend, commitSpend, cardPlayable, cardCovers,
+  cycleForPlayable, resolveSpend, commitSpend, cardPlayable, deadHeldCount,
+  extinctHeldCount,
 } from '../server/src/cards.ts';
+import { computeChoiceSet } from '../server/src/metrics.ts';
+
+/**
+ * The choice set comes from `server/src/metrics.ts`, the same function the live server
+ * records with. That is the whole point of the module: a simulated `open` and a real-play
+ * `open` computed by different code are two numbers that cannot be compared, and comparing
+ * them is the only reason to have either. This harness is a *predictor* of production, or
+ * it is nothing.
+ */
 
 /** Set BALANCE_NO_SWAP=1 to measure without the extinct-card replacement, for comparison. */
 const SWAP = process.env.BALANCE_NO_SWAP !== '1';
@@ -30,23 +40,11 @@ const SWAP = process.env.BALANCE_NO_SWAP !== '1';
 const GAMES = Number(process.env.GAMES ?? 120);
 const MAX_PLIES = Number(process.env.MAX_PLIES ?? 60);
 
-const CARD_PIECE_T = { pawn: 'p', knight: 'n', bishop: 'b', rook: 'r', queen: 'q' };
-
-/** Piece types this hand can pay for, king included -- he is always free. */
-function reach(side, movable) {
-  const out = new Set(['k']);
-  if (side.emergency) { for (const t of 'pnbrq') out.add(t); return out; }
-  for (const type of movable) {
-    if (side.hand.some(c => cardCovers(c, type))) out.add(type);
-  }
-  return out;
-}
-
 function simulate() {
   const s = {
     turns: 0, open: 0, moveCov: 0, typeCov: 0, emergency: 0, wild: 0,
     distinct: 0, handSize: 0, stuckToKing: 0, plies: 0, games: 0,
-    swapped: 0, swapTurns: 0, deadHeld: 0, cycled: 0, atCap: 0,
+    swapped: 0, swapTurns: 0, deadHeld: 0, cycled: 0, atCap: 0, dead: 0, forced: 0,
     lateTurns: 0, lateOpen: 0, lateMoveCov: 0, lateTypeCov: 0,
     lateEmergency: 0, lateDead: 0, lateSwap: 0,
   };
@@ -80,8 +78,11 @@ function simulate() {
       const movable = new Set(legal.map(m => m.piece));
       side.emergency = side.hand.length === 0
         || !side.hand.some(c => cardPlayable(c, movable));
-      const r = reach(side, movable);
-      const affordable = legal.filter(m => r.has(m.piece));
+
+      // the server's own definition, not a second one that looks like it
+      const cs = computeChoiceSet(chess, side);
+      const affordable = legal.filter(m => cs.reach.has(m.piece));
+      if (affordable.length === 0) break;
 
       s.turns++;
       s.plies++;
@@ -89,27 +90,29 @@ function simulate() {
       // piece you no longer own stops being a rarity and starts being most of your hand
       const late = ply >= 50;
       if (late) s.lateTurns++;
-      if (affordable.length === legal.length) { s.open++; if (late) s.lateOpen++; }
-      s.moveCov += affordable.length / legal.length;
-      s.typeCov += [...movable].filter(t => r.has(t)).length / movable.size;
+      if (cs.openTurn) { s.open++; if (late) s.lateOpen++; }
+      const moveCov = cs.affordableMoves / cs.legalMoves;
+      const typeCov = cs.affordableTypes / cs.legalTypes;
+      s.moveCov += moveCov;
+      s.typeCov += typeCov;
       if (late) {
-        s.lateMoveCov += affordable.length / legal.length;
-        s.lateTypeCov += [...movable].filter(t => r.has(t)).length / movable.size;
+        s.lateMoveCov += moveCov;
+        s.lateTypeCov += typeCov;
         if (side.emergency) s.lateEmergency++;
       }
       if (side.emergency) s.emergency++;
       if (side.hand.some(c => c.kind === 'wild')) s.wild++;
       // cards held for a piece that no longer exists: dead weight, not a constraint
-      const goneNow = extinctTypes(chess, color);
-      const deadNow = side.hand.filter(
-        c => c.kind !== 'wild' && goneNow.has(CARD_PIECE_T[c.kind])).length;
+      const deadNow = extinctHeldCount(side, extinctTypes(chess, color));
       s.deadHeld += deadNow;
+      s.dead += deadHeldCount(side, movable);
       if (late) s.lateDead += deadNow;
       s.distinct += new Set(side.hand.map(c => c.kind)).size;
       s.handSize += side.hand.length;
       if (side.hand.length >= TUNING.handMax) s.atCap++;
       // the pinch that actually hurts: the only thing you may move is the king
-      if (affordable.every(m => m.piece === 'k')) s.stuckToKing++;
+      if (cs.onlyKing) s.stuckToKing++;
+      if (cs.forced) s.forced++;
 
       const pick = affordable[Math.floor(Math.random() * affordable.length)];
       const spend = resolveSpend(side, pick.piece);
@@ -133,6 +136,8 @@ function simulate() {
     deadHeld: per(s.deadHeld),
     cycled: per(s.cycled),
     atCap: per(s.atCap),
+    dead: per(s.dead),
+    forced: per(s.forced),
     late: s.lateTurns === 0 ? null : {
       open: s.lateOpen / s.lateTurns,
       moveCov: s.lateMoveCov / s.lateTurns,

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import type { BugReport, ReportContext } from './types.js';
+import type { BugReport, ReportAttachment, ReportContext } from './types.js';
 
 /**
  * Bug reports, filed from inside the running app.
@@ -23,6 +23,24 @@ const DIR = process.env.REPORTS_DIR
 
 const MAX_INDEX = 1000;
 export const MAX_REPORT_CHARS = 2000;
+
+/**
+ * Screenshots.
+ *
+ * Bounded on every axis, because this is the one place an unauthenticated client can put
+ * bytes on our disk. The client downscales before sending; these are the numbers the
+ * server refuses past, not the ones it expects.
+ */
+export const MAX_ATTACHMENTS = 3;
+const MAX_ATTACHMENT_BYTES = 3_000_000;
+const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const EXT: Record<string, string> = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp',
+};
+
+function attachmentDir(reportId: string): string {
+  return path.join(DIR, 'attachments', reportId);
+}
 
 const index: BugReport[] = [];
 let ready = false;
@@ -104,9 +122,119 @@ function cleanContext(raw: unknown): ReportContext {
   };
 }
 
+/**
+ * Turn `data:image/png;base64,…` into bytes, or null.
+ *
+ * Everything is checked rather than trusted: the prefix, the declared type against an
+ * allow-list, and the decoded size. A client can send anything, and this is the point
+ * where "anything" stops.
+ */
+function decodeDataUrl(raw: unknown): { mime: string; buf: Buffer } | null {
+  if (typeof raw !== 'string' || raw.length > MAX_ATTACHMENT_BYTES * 2) return null;
+  const m = /^data:([a-z/+-]+);base64,(.+)$/i.exec(raw);
+  if (!m) return null;
+  const mime = m[1].toLowerCase();
+  if (!ALLOWED_MIME.has(mime)) return null;
+  try {
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length === 0 || buf.length > MAX_ATTACHMENT_BYTES) return null;
+    return { mime, buf };
+  } catch { return null; }
+}
+
+/**
+ * A display name, and only ever a display name.
+ *
+ * The file on disk is named by its own hex id, so nothing the client sends reaches a path
+ * -- which is the property that actually protects the directory. This tidies the label
+ * anyway: separators become underscores and runs of dots collapse, so a name that was
+ * trying to be a path does not go on reading like one in the panel.
+ */
+function cleanName(raw: unknown): string {
+  if (typeof raw !== 'string') return 'screenshot';
+  const base = raw
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[._-]+/, '')
+    .slice(0, 60);
+  return base || 'screenshot';
+}
+
+function writeAttachments(reportId: string,
+                          list: Array<{ name?: string; dataUrl?: string }>): ReportAttachment[] {
+  const out: ReportAttachment[] = [];
+  const dir = attachmentDir(reportId);
+  let made = false;
+
+  for (const item of list.slice(0, MAX_ATTACHMENTS)) {
+    const decoded = decodeDataUrl(item?.dataUrl);
+    if (!decoded) continue;
+    // Made only once something has survived validation: a report whose attachments were
+    // all rubbish should leave no trace on disk, not an empty directory nobody deletes.
+    if (!made) {
+      try { fs.mkdirSync(dir, { recursive: true }); made = true; }
+      catch (err) {
+        console.warn('[reports] no attachment dir:', (err as Error).message);
+        return out;
+      }
+    }
+    const id = randomBytes(6).toString('hex');
+    try {
+      fs.writeFileSync(path.join(dir, `${id}.${EXT[decoded.mime]}`), decoded.buf);
+      out.push({
+        id,
+        name: cleanName(item?.name),
+        mime: decoded.mime,
+        bytes: decoded.buf.length,
+      });
+    } catch (err) {
+      console.warn('[reports] attachment write failed:', (err as Error).message);
+    }
+  }
+  return out;
+}
+
+/** The bytes of one attachment, for an admin that has already been checked. */
+export function readAttachment(reportId: string, attachmentId: string):
+    { mime: string; base64: string } | null {
+  if (!ready) initReports();
+  // both ids go into a path, so both are matched against a shape rather than sanitised
+  if (!/^[a-z0-9-]{8,64}$/i.test(reportId)) return null;
+  if (!/^[a-f0-9]{12}$/.test(attachmentId)) return null;
+
+  const report = index.find(r => r.id === reportId);
+  const meta = report?.attachments?.find(a => a.id === attachmentId);
+  if (!meta) return null;
+
+  try {
+    const file = path.join(attachmentDir(reportId), `${attachmentId}.${EXT[meta.mime]}`);
+    return { mime: meta.mime, base64: fs.readFileSync(file).toString('base64') };
+  } catch {
+    return null;   // resolved, and the bytes are already gone
+  }
+}
+
+/**
+ * Delete a report's screenshots and forget they existed.
+ *
+ * Called when a report is resolved. A screenshot is evidence for a bug; once the bug is
+ * fixed it is a picture of somebody's screen that we have no further reason to keep, and
+ * keeping it is a decision nobody made.
+ */
+export function dropAttachments(report: BugReport): void {
+  if (!report.attachments?.length) return;
+  const dir = attachmentDir(report.id);
+  for (const a of report.attachments) {
+    try { fs.unlinkSync(path.join(dir, `${a.id}.${EXT[a.mime]}`)); } catch { /* already gone */ }
+  }
+  try { fs.rmdirSync(dir); } catch { /* not empty, or never existed */ }
+  report.attachments = [];
+}
+
 export interface FileReportInput {
   text: unknown;
   context: unknown;
+  attachments: unknown;
   accountId: string | null;
   reporter: string;
 }
@@ -116,17 +244,21 @@ export function fileReport(input: FileReportInput): BugReport | null {
   const text = cleanText(input.text);
   if (!text) return null;
 
+  const id = `${new Date().toISOString().slice(0, 10)}-${randomBytes(4).toString('hex')}`;
   const report: BugReport = {
-    id: `${new Date().toISOString().slice(0, 10)}-${randomBytes(4).toString('hex')}`,
+    id,
     at: Date.now(),
     text,
     reporter: input.reporter.slice(0, 24),
     accountId: input.accountId,
     context: cleanContext(input.context),
+    attachments: Array.isArray(input.attachments)
+      ? writeAttachments(id, input.attachments as Array<{ name?: string; dataUrl?: string }>)
+      : [],
     resolved: false,
   };
 
-  if (!write(report)) return null;
+  if (!write(report)) { dropAttachments(report); return null; }
   index.unshift(report);
   if (index.length > MAX_INDEX) index.length = MAX_INDEX;
   return report;
@@ -144,6 +276,9 @@ export function setResolved(id: string, resolved: boolean): BugReport | null {
   if (!r) return null;
   r.resolved = resolved;
   r.resolvedAt = resolved ? Date.now() : undefined;
+  // Resolving throws the screenshots away. Reopening cannot bring them back, which is
+  // worth knowing before pressing it -- the panel says so.
+  if (resolved) dropAttachments(r);
   write(r);
   return r;
 }

@@ -4,13 +4,16 @@ import {
   createCards, cardsPublic, drawPerTurnFor, drawCards, drawBonus, refreshEmergency,
   resolveSpend, resolveSacrifice, commitSpend, snapshotCards, movableTypes, cardCovers,
   FREE_PIECE, extinctTypes, replaceExtinct, cycleForPlayable, mulligan as mulliganCards,
-  aliveTypeCount, handCapFor, canCastle, canSacrifice, chooseSacrificeCards,
+  aliveTypeCount, handCapFor, canCastle, canSacrifice, chooseSacrificeCards, handReach,
   type CardsState, type Spend,
 } from './cards.js';
+import {
+  computeChoiceSet, materialBalance, hangingAfter, cardsSnapshot,
+} from './metrics.js';
 import type {
   Color, GameMode, RoomConfig, RoomState, SeatView, TeamView, GameOver, SeatKind,
   SeatStats, HistoryEntry, PendingTakeback, PendingDraw, MovePayload, ChatMessage,
-  ChatChannel, MarkView,
+  ChatChannel, MarkView, PlyMetric, PlyCards,
 } from './types.js';
 
 export interface InternalSeat {
@@ -28,6 +31,14 @@ export interface InternalSeat {
   kind: SeatKind;
   connected: boolean;
   stats: SeatStats;
+  /**
+   * When this seat last completed a move.
+   *
+   * The other half of wait time: how long a player sits between their own turns. In a 5v5
+   * that is four other people's thinking, and it is the number that decides whether the
+   * rotation is fun -- which no result table will ever show.
+   */
+  lastMoveAt: number | null;
 }
 
 export interface Team {
@@ -69,6 +80,15 @@ export interface Room {
   lastMove: { from: string; to: string } | null;
   lastMoveAuto: boolean;
   history: HistoryEntry[];
+  /**
+   * One row per ply, measured as it is played.
+   *
+   * Deliberately *not* in `RoomState`. That object is broadcast to everyone in the room,
+   * spectators included, and every card field here reconstructs a hand -- which is the
+   * whole mode. It reaches a client only through the archive, once the game is over and
+   * there is nothing left to protect.
+   */
+  plyMetrics: PlyMetric[];
   frames: PlyFrame[];
   gameOver: GameOver | null;
   /**
@@ -123,7 +143,7 @@ function makeTeam(color: Color, size: number): Team {
     cursor: 0,
     seats: Array.from({ length: size }, (_, id) => ({
       id, name: null, token: null, accountId: null, kind: 'human' as SeatKind,
-      connected: false, stats: emptyStats(),
+      connected: false, stats: emptyStats(), lastMoveAt: null,
     })),
   };
 }
@@ -172,6 +192,7 @@ export function createRoom(config: RoomConfig): Room {
     lastMove: null,
     lastMoveAuto: false,
     history: [],
+    plyMetrics: [],
     frames: [],
     gameOver: null,
     gameSeq: 0,
@@ -345,6 +366,24 @@ export function applyMove(room: Room, m: MovePayload,
     if (!spend) return FAIL;
   }
 
+  // Measured before the board is touched: the choice set is what the mover *had*, and the
+  // hand is what they held while they had it. Both are gone a line later.
+  const now = Date.now();
+  const before = {
+    choice: computeChoiceSet(room.chess, room.cards ? room.cards[mover] : null),
+    inCheck: room.chess.inCheck(),
+    cards: room.cards
+      ? cardsSnapshot(room.chess, room.cards[mover], mover, room.history.length,
+          paymentOf(spend), spend?.kind === 'card' ? spend.card.kind : null)
+      : undefined,
+    thinkMs: room.turnStartedAt ? Math.max(0, now - room.turnStartedAt) : 0,
+    waitMs: seat?.lastMoveAt != null && room.turnStartedAt != null
+      ? Math.max(0, room.turnStartedAt - seat.lastMoveAt)
+      : null,
+    clockRemainingMs: room.turnDeadline != null
+      ? Math.max(0, room.turnDeadline - now) : null,
+  };
+
   let res;
   try {
     res = room.chess.move({ from: m.from, to: m.to, promotion: (m.promotion as 'q') ?? 'q' });
@@ -391,6 +430,8 @@ export function applyMove(room: Room, m: MovePayload,
     seat.stats.captured += capturedValue;
   }
 
+  if (seat) seat.lastMoveAt = Date.now();
+
   room.lastMove = { from: res.from, to: res.to };
   room.lastMoveAuto = auto;
   // marks describe *this* position, so they expire with it -- and so does a draw offer,
@@ -419,6 +460,17 @@ export function applyMove(room: Room, m: MovePayload,
     pruneExtinct(room);
   }
 
+  recordPly(room, {
+    before,
+    entry,
+    res,
+    capturedValue,
+    auto,
+    byBot,
+    seatId: seat ? seat.id : -1,
+    mover,
+  });
+
   if (room.chess.isGameOver()) {
     room.status = 'finished';
     room.gameOver = classifyGameOver(room.chess, mover);
@@ -435,6 +487,90 @@ export function applyMove(room: Room, m: MovePayload,
   };
 }
 
+/** Which of the four ways a move can be paid for was used. */
+function paymentOf(spend: Spend | null): PlyCards['payment'] {
+  if (!spend) return 'free';
+  switch (spend.kind) {
+    case 'card':      return 'card';
+    case 'sacrifice': return 'sacrifice';
+    case 'emergency': return 'emergency';
+    default:          return 'free';
+  }
+}
+
+interface RecordInput {
+  before: {
+    choice: ReturnType<typeof computeChoiceSet>;
+    inCheck: boolean;
+    cards: PlyCards | undefined;
+    thinkMs: number;
+    waitMs: number | null;
+    clockRemainingMs: number | null;
+  };
+  entry: HistoryEntry;
+  res: { from: string; to: string; piece: string; flags: string; captured?: string;
+         promotion?: string };
+  capturedValue: number;
+  auto: boolean;
+  byBot: boolean;
+  seatId: number;
+  mover: Color;
+}
+
+/**
+ * Complete the row for a ply that has already been applied.
+ *
+ * The board is now in the position the move produced, which is exactly what the hanging
+ * check needs -- one move generation, no search.
+ */
+function recordPly(room: Room, x: RecordInput): void {
+  const { before, res } = x;
+  const movedType = res.promotion ?? res.piece;
+  const { hung, hungValue } = hangingAfter(room.chess, res.to, movedType, x.capturedValue);
+
+  const materialAfter = materialBalance(room.chess);
+  const timerMs = room.config.moveTimerSec != null ? room.config.moveTimerSec * 1000 : null;
+
+  room.plyMetrics.push({
+    ply: x.entry.ply,
+    color: x.mover,
+    seatId: x.seatId,
+    bot: x.byBot && !x.auto,
+    auto: x.auto,
+
+    legalMoves: before.choice.legalMoves,
+    legalTypes: before.choice.legalTypes,
+    affordableMoves: before.choice.affordableMoves,
+    affordableTypes: before.choice.affordableTypes,
+    openTurn: before.choice.openTurn,
+    onlyKing: before.choice.onlyKing,
+    forced: before.choice.forced,
+    inCheck: before.inCheck,
+
+    piece: res.piece,
+    captured: res.captured ?? null,
+    promotion: res.flags.includes('p'),
+    castle: res.flags.includes('k') || res.flags.includes('q'),
+    // recorded from White's point of view; `swing` is from the mover's
+    materialAfter,
+    swing: x.mover === 'white' ? x.capturedValue : -x.capturedValue,
+    hung,
+    hungValue,
+    bestCapture: before.choice.bestCapture,
+    missed: Math.max(0, before.choice.bestCapture - x.capturedValue),
+
+    thinkMs: before.thinkMs,
+    waitMs: before.waitMs,
+    clockRemainingMs: before.clockRemainingMs,
+    // rounded, because eighteen digits of a ratio is seventeen digits of archive
+    clockFraction: timerMs != null && before.clockRemainingMs != null
+      ? Math.round((before.clockRemainingMs / timerMs) * 1000) / 1000
+      : null,
+
+    cards: before.cards,
+  });
+}
+
 /** Rewind one ply, restoring rotation cursors and stats along with the board. */
 export function undoPly(room: Room): boolean {
   const frame = room.frames.pop();
@@ -443,6 +579,7 @@ export function undoPly(room: Room): boolean {
   if (!undone) { room.frames.push(frame); return false; }
 
   room.history.pop();
+  room.plyMetrics.pop();     // a ply that did not happen was not measured
   room.marks.clear();
   // The hands go back too, or a takeback would launder a spent Queen into a free one.
   if (frame.cards) room.cards = frame.cards;
@@ -541,7 +678,9 @@ export function beginCardTurn(room: Room): void {
   // deal simply stops until the hand has been spent back down under it.
   const cap = handCapOf(room, turn);
   side.openedTurns++;
-  if (side.openedTurns > 1) drawCards(side, drawPerTurnFor(room.history.length), cap);
+  side.lastDrawn = side.openedTurns > 1
+    ? drawCards(side, drawPerTurnFor(room.history.length), cap)
+    : side.hand.length;   // the opening hand *is* the first turn's deal
   // The prune after each ply does the real work; this catches the opening deal and any
   // path that reaches a turn without one. Appended, so a swap explained from the previous
   // ply is still on the note the player is about to read.
@@ -596,18 +735,7 @@ export function canCastleNow(room: Room): boolean {
 export function affordableTypes(room: Room): Set<string> | null {
   if (!room.cards) return null;
   const turn: Color = room.chess.turn() === 'w' ? 'white' : 'black';
-  const side = room.cards[turn];
-  const movable = movableTypes(room.chess);
-
-  // the emergency move reaches everything, which is the point of it
-  if (side.emergency) return movable;
-
-  const out = new Set<string>();
-  if (movable.has(FREE_PIECE)) out.add(FREE_PIECE);
-  for (const type of movable) {
-    if (side.hand.some(c => cardCovers(c, type))) out.add(type);
-  }
-  return out;
+  return handReach(room.cards[turn], movableTypes(room.chess));
 }
 
 /** Play a move for a seat that ran out of time: a uniformly random legal move. */
@@ -823,6 +951,7 @@ export function resetGame(room: Room, status: 'lobby' | 'playing'): void {
   room.lastMove = null;
   room.lastMoveAuto = false;
   room.history = [];
+  room.plyMetrics = [];
   room.frames = [];
   room.marks.clear();
   room.bankedMs = null;
@@ -833,6 +962,6 @@ export function resetGame(room: Room, status: 'lobby' | 'playing'): void {
   room.white.cursor = 0;
   room.black.cursor = 0;
   for (const t of [room.white, room.black]) {
-    for (const s of t.seats) s.stats = emptyStats();
+    for (const s of t.seats) { s.stats = emptyStats(); s.lastMoveAt = null; }
   }
 }

@@ -205,7 +205,16 @@ the mode, the position, the ply count, the viewport and the browser along with y
 sentence — and shows you exactly what it is attaching before it sends, because a report
 that quietly collects context is a report people stop trusting.
 
-Reports land in `data/reports` and are read in the admin panel.
+**Screenshots too.** Paste with `Ctrl`/`Cmd`+`V`, drop a file on the dialog, or use the
+button — up to three. They are downscaled in the browser before they are sent, and
+**deleted the moment the report is resolved**: a screenshot is evidence for a bug, and once
+the bug is fixed it is a picture of somebody's screen that nobody has a reason to keep.
+Resolving asks first, because reopening cannot bring them back. Only an admin can view
+them, and they travel over the socket rather than from a URL — a URL would need the session
+in a query string, which is exactly where a credential ends up in logs.
+
+Reports land in `data/reports`, images in `data/reports/attachments`, and both are read in
+the admin panel.
 
 ## Admin
 
@@ -221,6 +230,21 @@ rather than from a separate analytics stream, so there is nothing to keep in syn
 Access is decided by the server on every call from the session's account, so the page never
 asks whether it should be allowed to draw itself: it asks for data and draws what comes
 back.
+
+## What gets measured
+
+Every ply is recorded as it is played: how many moves were legal, how many the hand could
+actually pay for, what was held and what was drawn, think time, **wait time** (your previous
+turn ending to your next opening — the rotation's real cost), material, and whether the
+piece you just moved can simply be taken.
+
+It lives on the server and reaches the archive when the game ends, **never** in the state
+broadcast to the room — every card field reconstructs a hand, and the room includes your
+opponent. A test asserts that.
+
+The same module computes the numbers for `npm run balance`, so the simulation we tune
+against and real play are finally the same measurement rather than two that resemble each
+other. `docs/METRICS.md` is the full taxonomy and what is still to come.
 
 ## Stepping back through a game
 

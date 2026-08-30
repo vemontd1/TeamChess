@@ -69,19 +69,72 @@ function reportRow(r: BugReport): string {
     c.route,
   ].filter(Boolean) as string[];
 
+  const shots = r.attachments ?? [];
   return `<article class="adm-report${r.resolved ? ' done' : ''}" data-id="${escapeHtml(r.id)}">
     <header>
       <span class="adm-rep-who">${escapeHtml(r.reporter)}</span>
       <span class="adm-rep-when">${escapeHtml(when(r.at))}</span>
-      <button class="btn btn-sm ${r.resolved ? 'btn-ghost' : ''}" data-act="toggle">
+      ${shots.length > 0
+        ? `<span class="adm-rep-count">${shots.length} image${shots.length > 1 ? 's' : ''}</span>`
+        : ''}
+      <button class="btn btn-sm ${r.resolved ? 'btn-ghost' : ''}" data-act="toggle"
+        title="${r.resolved ? 'Put this back on the list'
+          : shots.length > 0
+            ? 'Resolving deletes the screenshots on this report — it cannot be undone'
+            : 'Mark this report done'}">
         ${r.resolved ? 'Reopen' : 'Mark done'}</button>
     </header>
     <p class="adm-rep-text">${escapeHtml(r.text)}</p>
+    ${shots.length > 0 ? `<div class="adm-rep-shots">
+      ${shots.map(a => `<button class="adm-shot" data-att="${escapeHtml(a.id)}"
+          title="${escapeHtml(a.name)}">
+          <span class="adm-shot-load">image</span>
+        </button>`).join('')}
+    </div>` : ''}
     <div class="adm-rep-ctx">${bits.map(b => `<span>${escapeHtml(b)}</span>`).join('')}</div>
     ${c.fen ? `<code class="adm-rep-fen">${escapeHtml(c.fen)}</code>` : ''}
     ${c.userAgent ? `<details class="adm-rep-ua"><summary>browser</summary>
       <code>${escapeHtml(c.userAgent)}</code></details>` : ''}
   </article>`;
+}
+
+/**
+ * Screenshots are fetched one at a time, on demand.
+ *
+ * A page of reports would otherwise pull every image on every render, and they are the
+ * only large thing here. The bytes come over the socket rather than from a URL, because a
+ * URL would need the session in a query string.
+ */
+function wireShots(card: HTMLElement, reportId: string): void {
+  card.querySelectorAll<HTMLButtonElement>('.adm-shot').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (btn.dataset.loaded === '1') {
+        const img = btn.querySelector('img');
+        if (img) openLightbox(img.src);
+        return;
+      }
+      btn.disabled = true;
+      const att = await net.adminAttachment(reportId, btn.dataset.att!);
+      btn.disabled = false;
+      if (!att) {
+        btn.textContent = 'gone';
+        btn.classList.add('adm-shot-gone');
+        btn.title = 'This screenshot was deleted when the report was resolved';
+        return;
+      }
+      btn.dataset.loaded = '1';
+      btn.innerHTML = `<img src="data:${att.mime};base64,${att.base64}" alt="">`;
+    });
+  });
+}
+
+/** Full size, over everything, dismissed by clicking anywhere. */
+function openLightbox(src: string): void {
+  const host = document.createElement('div');
+  host.className = 'shot-lightbox';
+  host.innerHTML = `<img src="${src}" alt="">`;
+  host.addEventListener('click', () => host.remove());
+  document.body.appendChild(host);
 }
 
 export function renderAdmin(root: HTMLElement, account: Account): () => void {
@@ -183,9 +236,17 @@ export function renderAdmin(root: HTMLElement, account: Account): () => void {
     });
 
     root.querySelectorAll<HTMLElement>('.adm-report').forEach(card => {
+      const id = card.dataset.id!;
+      wireShots(card, id);
       card.querySelector('[data-act="toggle"]')!.addEventListener('click', async () => {
-        const id = card.dataset.id!;
         const now = reports.find(r => r.id === id);
+        // Resolving throws the screenshots away and reopening cannot bring them back, so
+        // it asks once rather than being quietly destructive.
+        if (!now?.resolved && (now?.attachments?.length ?? 0) > 0) {
+          const n = now!.attachments!.length;
+          if (!confirm(`Mark this done? The ${n} screenshot${n > 1 ? 's' : ''} on it `
+            + 'will be deleted, and reopening will not bring them back.')) return;
+        }
         const updated = await net.adminResolveReport(id, !(now?.resolved ?? false));
         if (!updated) { toast('Could not update that report', 'danger'); return; }
         reports = reports.map(r => (r.id === id ? updated : r));

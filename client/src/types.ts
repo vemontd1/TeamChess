@@ -253,6 +253,11 @@ export interface GameSummary {
 export interface ArchivedGame {
   id: string;
   finishedAt: number;
+  /**
+   * How the game measured. Absent on every game archived before metrics existed, which is
+   * a permanent condition rather than a migration: readers treat it as optional.
+   */
+  metrics?: GameMetrics;
   roomId: string;
   config: RoomConfig;
   white: string[];
@@ -303,6 +308,123 @@ export interface ProfileView {
   activity: Record<string, number>;
 }
 
+// --- metrics ---
+
+/**
+ * The card state behind one ply. Chess Cards only.
+ *
+ * Never part of `RoomState`: every field here reconstructs a hand, and `RoomState` is
+ * broadcast to the whole room including spectators. These reach a client only once the
+ * game is over and there is nothing left to protect.
+ */
+export interface PlyCards {
+  handSize: number;
+  handCap: number;
+  /** How many of each kind was held. Summed over a game, what the player actually saw. */
+  handKinds: Record<string, number>;
+  drawn: number;
+  deadHeld: number;
+  extinctHeld: number;
+  replaced: number;
+  cycled: number;
+  payment: 'card' | 'sacrifice' | 'emergency' | 'free';
+  spentKind: string | null;
+  canCastle: boolean;
+  deckLeft: number;
+  discardLeft: number;
+  sacrificeReadyIn: number;
+}
+
+/** One half-move, as measured. The row everything else is an aggregate of. */
+export interface PlyMetric {
+  ply: number;
+  color: Color;
+  seatId: number;
+  bot: boolean;
+  auto: boolean;
+
+  // the choice set: what could have been played
+  legalMoves: number;
+  legalTypes: number;
+  affordableMoves: number;
+  affordableTypes: number;
+  /** The cards did nothing: everything legal was affordable anyway. */
+  openTurn: boolean;
+  onlyKing: boolean;
+  forced: boolean;
+  inCheck: boolean;
+
+  // the move actually made
+  piece: string;
+  captured: string | null;
+  promotion: boolean;
+  castle: boolean;
+  /** Material from White's point of view, after the ply. */
+  materialAfter: number;
+  /** What this ply won, from the mover's point of view. */
+  swing: number;
+  /** The moved piece can be taken for more than it won. */
+  hung: boolean;
+  hungValue: number;
+  /** Best capture the mover could have afforded this turn. */
+  bestCapture: number;
+  /** `bestCapture` minus what was taken: material left on the table. */
+  missed: number;
+
+  // clock and attention
+  thinkMs: number;
+  /** This seat's previous turn ending to this turn opening -- the rotation's real cost. */
+  waitMs: number | null;
+  clockRemainingMs: number | null;
+  clockFraction: number | null;
+
+  cards?: PlyCards;
+}
+
+/** One side's game, rolled up from its plies. */
+export interface SideMetrics {
+  moves: number;
+  autoMoves: number;
+  botMoves: number;
+  thinkMsMean: number;
+  thinkMsP90: number;
+  waitMsMean: number;
+  waitMsMax: number;
+  affordableRatioMean: number;
+  openTurns: number;
+  onlyKingTurns: number;
+  forcedTurns: number;
+  hangs: number;
+  missedTotal: number;
+  captures: number;
+  checksGiven: number;
+  cardsDrawn: number;
+  cardsSpent: number;
+  drawnKinds: Record<string, number>;
+  spentKinds: Record<string, number>;
+  deadHeldMean: number;
+  atCapTurns: number;
+  emergencies: number;
+  sacrifices: number;
+  cycles: number;
+  replacements: number;
+}
+
+export interface GameMetrics {
+  /** Bumped when the shape changes. Old games have no block at all; never invent one. */
+  schema: number;
+  plies: PlyMetric[];
+  white: SideMetrics;
+  black: SideMetrics;
+  durationMs: number;
+  firstCapturePly: number | null;
+  firstCheckPly: number | null;
+  leadChanges: number;
+  maxLead: number;
+  /** The winner was behind at some point. */
+  comeback: boolean;
+}
+
 // --- bug reports ---
 
 /** What the client knew when a report was filed. Every field is optional by nature. */
@@ -318,10 +440,26 @@ export interface ReportContext {
   viewport: string | null;
 }
 
+/**
+ * A screenshot on a report.
+ *
+ * The bytes live on disk beside the report; only this record is carried in JSON. Both are
+ * deleted when the report is resolved -- a screenshot is evidence for a bug, and once the
+ * bug is fixed it is someone's screen that we have no further reason to hold.
+ */
+export interface ReportAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  bytes: number;
+}
+
 export interface BugReport {
   id: string;
   at: number;
   text: string;
+  /** Screenshots, deleted when the report is resolved. */
+  attachments?: ReportAttachment[];
   /** The name the reporter was playing under; an account id when they had one. */
   reporter: string;
   accountId: string | null;
@@ -330,7 +468,12 @@ export interface BugReport {
   resolvedAt?: number;
 }
 
-export interface ReportPayload { text?: string; context?: unknown; }
+export interface ReportPayload {
+  text?: string;
+  context?: unknown;
+  /** Images as data URLs, downscaled by the client before they are sent. */
+  attachments?: Array<{ name?: string; dataUrl?: string }>;
+}
 
 // --- admin ---
 

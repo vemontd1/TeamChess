@@ -774,3 +774,102 @@ a.btn {
   .adm-game { grid-template-columns: minmax(0, 1fr) auto; }
   .adm-game-mode, .adm-game-plies, .adm-game-res { display: none; }
 }
+
+/* ---- screenshots on a report -------------------------------------------------
+   Downscaled in the browser before they are sent, and deleted the moment the report
+   is resolved: evidence for a bug, not a picture of someone's screen we keep. */
+
+.report-shots { margin-top: 14px; text-align: left; }
+.report-shots-head { display: flex; align-items: center; gap: 10px; }
+.report-shots-head .btn { margin-left: auto; }
+.report-shots-hint {
+  margin: 4px 0 0;
+  font-size: calc(11px * var(--ui));
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+.report-shots-hint b { color: var(--text-dim); font-weight: 600; }
+
+.report-thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
+.report-thumbs:empty { display: none; }
+
+.report-thumb {
+  position: relative;
+  margin: 0;
+  width: calc(96px * var(--ui));
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--panel-edge);
+  background: rgba(0, 0, 0, 0.3);
+}
+.report-thumb img { display: block; width: 100%; height: auto; }
+.report-thumb figcaption {
+  padding: 3px 6px;
+  font-size: calc(9.5px * var(--ui));
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+.report-thumb-x {
+  position: absolute;
+  top: 3px; right: 3px;
+  width: 20px; height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(10, 10, 12, 0.8);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.report-thumb-x:hover { background: var(--danger); color: #fff; }
+
+/* the modal says it will take a dropped file */
+.report-dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+
+/* ---- and how the admin sees them ---- */
+
+.adm-rep-count {
+  font-size: calc(10.5px * var(--ui));
+  color: var(--accent);
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--accent-wash);
+}
+
+.adm-rep-shots { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
+
+.adm-shot {
+  min-width: calc(72px * var(--ui));
+  min-height: calc(44px * var(--ui));
+  max-width: calc(180px * var(--ui));
+  padding: 0;
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-faint);
+  font: inherit;
+  font-size: calc(10.5px * var(--ui));
+  cursor: pointer;
+  overflow: hidden;
+}
+.adm-shot:hover { border-color: var(--panel-edge-strong); }
+.adm-shot img { display: block; width: 100%; height: auto; }
+.adm-shot-gone { opacity: 0.5; cursor: default; text-decoration: line-through; }
+
+.shot-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 4, 6, 0.86);
+  backdrop-filter: blur(4px);
+  cursor: zoom-out;
+}
+.shot-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
+}

@@ -188,12 +188,22 @@ export async function fetchRecentGames(limit = 20): Promise<GameSummary[]> {
 // ---- bug reports and admin ----
 
 /** File a report. The context is whatever the caller could see when it was written. */
-export function sendReport(text: string, context: Record<string, unknown>):
+export function sendReport(text: string, context: Record<string, unknown>,
+                           attachments: Array<{ name: string; dataUrl: string }> = []):
     Promise<{ ok: boolean; error?: string }> {
   return new Promise(resolve => {
-    sock().emit('report:send', { text, context },
+    sock().emit('report:send', { text, context, attachments },
       (res: { ok: boolean; error?: string } | undefined) =>
         resolve(res ?? { ok: false, error: 'No answer from the server.' }));
+  });
+}
+
+/** One screenshot off a report, admin only. Null when it is gone or you may not see it. */
+export function adminAttachment(reportId: string, attachmentId: string):
+    Promise<{ mime: string; base64: string } | null> {
+  return new Promise(resolve => {
+    sock().emit('admin:attachment', { reportId, attachmentId },
+      (res: { mime: string; base64: string } | null) => resolve(res ?? null));
   });
 }
 

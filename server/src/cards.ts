@@ -118,6 +118,8 @@ export interface CardSide {
   lastReplaced: CardKind[];
   /** Kinds cycled away this turn looking for something that could move. */
   lastCycled: CardKind[];
+  /** Cards dealt at the start of this turn. Recorded for the per-ply metrics. */
+  lastDrawn: number;
   sacrificesUsed: number;
   /** Ply count when the last sacrifice was paid, or null. Drives the cooldown. */
   lastSacrificePly: number | null;
@@ -168,7 +170,7 @@ function makeSide(seqStart: number): { side: CardSide; seq: number } {
   const side: CardSide = {
     hand: [], deck, discard: [], mulliganUsed: false,
     played: [], emergenciesUsed: 0, emergency: false, lastReplaced: [], lastCycled: [],
-    sacrificesUsed: 0, lastSacrificePly: null, openedTurns: 0,
+    lastDrawn: 0, sacrificesUsed: 0, lastSacrificePly: null, openedTurns: 0,
   };
   dealOpening(side);
   return { side, seq };
@@ -577,6 +579,32 @@ export function resolveSpend(side: CardSide, piece: string, explicitId?: number,
   return side.emergency ? { kind: 'emergency' } : null;
 }
 
+/**
+ * The piece types this hand can actually set in motion right now.
+ *
+ * One definition, three callers: the live server (what a bot or a blown clock may play),
+ * the metrics recorder, and the balance harness. They each had their own before, and they
+ * disagreed -- the server returned every movable type when the safety net was open, the
+ * harness returned the five piece kinds whether or not they could move. Two numbers that
+ * are supposed to be the same number, computed differently, make the comparison between
+ * simulation and real play worthless, which is the entire reason for collecting either.
+ *
+ * Intersected with what can legally move, always: a card for a piece that has no move is
+ * not reach, it is a card.
+ */
+export function handReach(side: CardSide, movable: Set<string>): Set<string> {
+  const out = new Set<string>();
+  if (movable.has(FREE_PIECE)) out.add(FREE_PIECE);   // the king is free, when he can move
+  if (side.emergency) {
+    for (const t of movable) out.add(t);
+    return out;
+  }
+  for (const t of movable) {
+    if (side.hand.some(c => cardCovers(c, t))) out.add(t);
+  }
+  return out;
+}
+
 /** True when this hand could pay for a castle right now: a Rook card, a Wild, or the net. */
 export function canCastle(side: CardSide): boolean {
   return side.emergency || side.hand.some(c => cardCovers(c, 'r'));
@@ -681,6 +709,29 @@ export function handView(side: CardSide, chess: Chess, onTurn: boolean): HandCar
   }));
 }
 
+/**
+ * How many of each kind this hand holds.
+ *
+ * Summed over a game this is the difference between what the deck *contains* and what a
+ * player actually *saw* -- which reshuffling distorts, and which no fixed deck list can
+ * answer.
+ */
+export function handComposition(side: CardSide): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const c of side.hand) out[c.kind] = (out[c.kind] ?? 0) + 1;
+  return out;
+}
+
+/** Cards in hand that can move nothing in this position. */
+export function deadHeldCount(side: CardSide, movable: Set<string>): number {
+  return side.hand.filter(c => !cardPlayable(c, movable)).length;
+}
+
+/** Cards in hand naming a piece the holder no longer has anywhere on the board. */
+export function extinctHeldCount(side: CardSide, extinct: Set<string>): number {
+  return side.hand.filter(c => isExtinct(c, extinct)).length;
+}
+
 /** A deep copy, so a takeback can put the hands back exactly as they were. */
 export function snapshotCards(cards: CardsState): CardsState {
   const clone = (s: CardSide): CardSide => ({
@@ -693,6 +744,7 @@ export function snapshotCards(cards: CardsState): CardsState {
     emergency: s.emergency,
     lastReplaced: [...s.lastReplaced],
     lastCycled: [...s.lastCycled],
+    lastDrawn: s.lastDrawn,
     sacrificesUsed: s.sacrificesUsed,
     lastSacrificePly: s.lastSacrificePly,
     openedTurns: s.openedTurns,

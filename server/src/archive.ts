@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ArchivedGame, GameSummary, HistoryEntry, RoomConfig } from './types.js';
+import type {
+  ArchivedGame, GameMetrics, GameSummary, HistoryEntry, RoomConfig,
+} from './types.js';
 
 /**
  * The game archive: finished games written to disk as JSON, one file per game.
@@ -107,6 +109,8 @@ export interface SaveInput {
   finalFen: string;
   result: 'white' | 'black' | 'draw' | 'unfinished';
   reason: string;
+  /** How the game measured. Absent for a game played before metrics existed. */
+  metrics?: GameMetrics;
 }
 
 /**

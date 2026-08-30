@@ -34,6 +34,11 @@ function mkClient(name) {
 
 const emitCb = (s, ev, payload) => new Promise(res => s.emit(ev, payload, res));
 
+/** A real 2x2 PNG, so the server decodes bytes rather than a string that looks like some. */
+const TINY_PNG = 'data:image/png;base64,'
+  + 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP8z8Dwn4GBgYGJAQ'
+  + 'kAABkwAgapUdHDAAAAAElFTkSuQmCC';
+
 const fetchJson = async path => {
   try {
     const res = await fetch(`${URL}${path}`);
@@ -1519,6 +1524,214 @@ async function main() {
     check('a non-host cannot add bots',
       h.last.black.seats.every(x => !x.occupied),
       JSON.stringify(h.last.black.seats.map(x => x.kind)));
+  }
+
+
+  {
+    log('\n=== 32. Every ply is measured, and none of it leaks ===');
+    const m1 = await mkClient('Met-W');
+    const ridM = await emitCb(m1, 'room:create',
+      { name: 'M', config: { mode: 'cards', moveTimerSec: 120 } });
+    const m2 = await mkClient('Met-B');
+    for (const c of [m1, m2]) await join(c, ridM);
+    await emitCb(m1, 'seat:take', { color: 'white' });
+    await emitCb(m2, 'seat:take', { color: 'black' });
+    m1.emit('game:start');
+    await waitFor(m1, st => st.status === 'playing');
+    await sleep(250);
+
+    // THE rule: RoomState is broadcast to the whole room, so nothing that reconstructs a
+    // hand may appear in it. This is the assertion that keeps a metrics block from
+    // quietly becoming an exploit.
+    const blob = JSON.stringify(m2.last);
+    check('the broadcast state carries no per-ply metrics',
+      !blob.includes('plyMetrics') && !blob.includes('handKinds')
+      && !blob.includes('affordableMoves') && !blob.includes('deadHeld'),
+      blob.slice(0, 120));
+    check('and no history entry carries a hand',
+      m2.last.history.every(h => h.cards === undefined && h.handKinds === undefined));
+
+    const byColor = { white: m1, black: m2 };
+    for (let i = 0; i < 16 && m1.last.status === 'playing'; i++) {
+      const st = m1.last;
+      const me = byColor[st.turn];
+      const g = new Chess(st.fen);
+      const r = reach(me.hand);
+      const opts = g.moves({ verbose: true }).filter(x => r.has(x.piece));
+      if (!opts.length) break;
+      const pick = opts.find(x => x.captured) ?? opts[Math.floor(Math.random() * opts.length)];
+      // a beat of thinking, so think time is a number rather than zero
+      await sleep(60);
+      if (!await emitCb(me, 'game:move',
+        { from: pick.from, to: pick.to, promotion: pick.promotion })) break;
+      await sleep(90);
+    }
+
+    const played = m1.last.history.length;
+    check('the game got somewhere', played >= 8, String(played));
+    m1.emit('game:resign');
+    await waitFor(m1, st => st.status === 'finished');
+    await sleep(400);
+
+    const archived = await fetchJson(`/api/games/${m1.archived.id}`);
+    const mx = archived?.metrics;
+    check('the archived game carries a metrics block', mx != null && mx.schema >= 1,
+      JSON.stringify(mx?.schema));
+    check('one row per ply', mx.plies.length === archived.history.length,
+      `${mx.plies.length} vs ${archived.history.length}`);
+
+    let bad = null;
+    for (const pm of mx.plies) {
+      if (pm.affordableMoves > pm.legalMoves) { bad = `ply ${pm.ply}: affordable > legal`; break; }
+      if (pm.legalMoves < 1) { bad = `ply ${pm.ply}: no legal moves recorded`; break; }
+      if (pm.affordableTypes > pm.legalTypes) { bad = `ply ${pm.ply}: types`; break; }
+      if (pm.thinkMs < 0) { bad = `ply ${pm.ply}: negative think`; break; }
+      if (!pm.cards) { bad = `ply ${pm.ply}: cards mode with no card metrics`; break; }
+      const held = Object.values(pm.cards.handKinds).reduce((a, b) => a + b, 0);
+      if (held !== pm.cards.handSize) {
+        bad = `ply ${pm.ply}: handKinds ${held} != handSize ${pm.cards.handSize}`; break;
+      }
+      if (!['card', 'sacrifice', 'emergency', 'free'].includes(pm.cards.payment)) {
+        bad = `ply ${pm.ply}: payment ${pm.cards.payment}`; break;
+      }
+    }
+    check('every row is internally consistent', bad === null, bad ?? '');
+
+    check('the choice set was actually constrained at least once',
+      mx.plies.some(pm => pm.affordableMoves < pm.legalMoves),
+      JSON.stringify(mx.plies.map(pm => `${pm.affordableMoves}/${pm.legalMoves}`).slice(0, 6)));
+    check('think time was measured',
+      mx.plies.some(pm => pm.thinkMs > 0), String(mx.plies[0]?.thinkMs));
+    check('wait time was measured for the second turn onward',
+      mx.plies.some(pm => pm.waitMs != null && pm.waitMs > 0),
+      JSON.stringify(mx.plies.map(pm => pm.waitMs).slice(0, 6)));
+    check('a card paid for at least one move',
+      mx.plies.some(pm => pm.cards.payment === 'card' && pm.cards.spentKind),
+      JSON.stringify(mx.plies.map(pm => pm.cards.payment).slice(0, 6)));
+
+    check('the sides were rolled up',
+      mx.white.moves + mx.black.moves === mx.plies.length
+      && mx.white.moves > 0 && mx.black.moves > 0,
+      JSON.stringify({ w: mx.white.moves, b: mx.black.moves }));
+    check('and the roll-up counts cards it saw',
+      mx.white.cardsSpent > 0 && Object.keys(mx.white.drawnKinds).length > 0,
+      JSON.stringify(mx.white.spentKinds));
+
+    // Team mode shares the pipeline and simply has no card block.
+    const t1 = await mkClient('Met-T1');
+    const ridT = await emitCb(t1, 'room:create',
+      { name: 'T', config: { teamSize: 1, moveTimerSec: 120 } });
+    const t2 = await mkClient('Met-T2');
+    for (const c of [t1, t2]) await join(c, ridT);
+    await emitCb(t1, 'seat:take', { color: 'white' });
+    await emitCb(t2, 'seat:take', { color: 'black' });
+    t1.emit('game:start');
+    await waitFor(t1, st => st.status === 'playing');
+    for (const [cli, from, to] of [
+      [t1, 'f2', 'f3'], [t2, 'e7', 'e5'], [t1, 'g2', 'g4'], [t2, 'd8', 'h4'],
+    ]) { await emitCb(cli, 'game:move', { from, to }); await sleep(90); }
+    await waitFor(t1, st => st.status === 'finished');
+    await sleep(400);
+
+    const tg = await fetchJson(`/api/games/${t1.archived.id}`);
+    check('team mode is measured too', tg?.metrics?.plies?.length === 4,
+      String(tg?.metrics?.plies?.length));
+    check('with no card block and nothing withheld',
+      tg.metrics.plies.every(pm => pm.cards === undefined
+        && pm.affordableMoves === pm.legalMoves && pm.openTurn === true),
+      JSON.stringify(tg.metrics.plies[0]));
+    check('and the shape of the game was recorded',
+      tg.metrics.firstCapturePly === null && typeof tg.metrics.maxLead === 'number'
+      && typeof tg.metrics.durationMs === 'number',
+      JSON.stringify({ cap: tg.metrics.firstCapturePly, lead: tg.metrics.maxLead }));
+  }
+
+
+  {
+    log('\n=== 33. Screenshots on a report, and their deletion ===');
+    const rep = await mkClient('Shot-Reporter');
+    await join(rep, await emitCb(rep, 'room:create',
+      { name: 'SR', config: { teamSize: 1 } }));
+
+    const sent = await emitCb(rep, 'report:send', {
+      text: 'The board scrolls instead of moving the piece.',
+      context: { viewport: '390x844' },
+      attachments: [
+        { name: 'shot one.png', dataUrl: TINY_PNG },
+        { name: '../../etc/passwd', dataUrl: TINY_PNG },
+      ],
+    });
+    check('a report with screenshots is accepted', sent.ok === true, sent.error ?? '');
+
+    // Anything that is not an image, or claims to be one, is dropped rather than stored.
+    const junk = await emitCb(rep, 'report:send', {
+      text: 'Report with rubbish attached.',
+      attachments: [
+        { name: 'evil.svg', dataUrl: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' },
+        { name: 'notadataurl', dataUrl: 'https://example.com/x.png' },
+        { name: 'empty', dataUrl: 'data:image/png;base64,' },
+      ],
+    });
+    check('a report whose attachments are all rubbish still files', junk.ok === true);
+
+    const admin = await mkClient('Arch-W');
+    const who = await signUp(admin);
+    if (who.account?.isAdmin !== true) {
+      log('  SKIP  the rest needs: ADMIN_USERS=Arch-W npm start');
+    } else {
+      const reports = await emitCb(admin, 'admin:reports', { limit: 50 });
+      const mine = reports.find(r => r.text.includes('scrolls instead'));
+      check('both images were kept', mine?.attachments?.length === 2,
+        JSON.stringify(mine?.attachments?.map(a => a.name)));
+      // The property that matters is that the name never reaches a path: files are named
+      // by their own hex id. The label is tidied as well, which is cosmetic.
+      // The property that matters is that the name never reaches a path: files are
+      // named by their own hex id. Tidying the label is cosmetic on top of that.
+      check('a filename never reaches the filesystem',
+        mine.attachments.every(a => /^[a-f0-9]{12}$/.test(a.id))
+        && mine.attachments.every(a => !a.name.includes('/')
+          && !a.name.includes('..')),
+        JSON.stringify(mine.attachments.map(a => [a.id, a.name])));
+      check('and they carry a type and a size',
+        mine.attachments.every(a => a.mime === 'image/png' && a.bytes > 0),
+        JSON.stringify(mine.attachments));
+
+      const rubbish = reports.find(r => r.text.includes('rubbish attached'));
+      check('an SVG, a URL and an empty string were all refused',
+        (rubbish?.attachments?.length ?? 0) === 0,
+        JSON.stringify(rubbish?.attachments));
+
+      const att = mine.attachments[0];
+      const got = await emitCb(admin, 'admin:attachment',
+        { reportId: mine.id, attachmentId: att.id });
+      check('an admin can read the bytes back',
+        got?.mime === 'image/png' && typeof got.base64 === 'string' && got.base64.length > 20,
+        JSON.stringify(got?.mime));
+
+      check('a guest cannot',
+        (await emitCb(rep, 'admin:attachment',
+          { reportId: mine.id, attachmentId: att.id })) === null);
+      check('and a path cannot be climbed out of',
+        (await emitCb(admin, 'admin:attachment',
+          { reportId: mine.id, attachmentId: '../../../secret' })) === null);
+
+      // The point of the whole feature: resolving throws the screenshots away.
+      const done = await emitCb(admin, 'admin:report-resolve',
+        { id: mine.id, resolved: true });
+      check('resolving the report clears its attachments',
+        done?.resolved === true && (done.attachments?.length ?? 0) === 0,
+        JSON.stringify(done?.attachments));
+      check('and the bytes are gone, not merely unlisted',
+        (await emitCb(admin, 'admin:attachment',
+          { reportId: mine.id, attachmentId: att.id })) === null);
+
+      const reopened = await emitCb(admin, 'admin:report-resolve',
+        { id: mine.id, resolved: false });
+      check('reopening does not bring them back',
+        reopened?.resolved === false && (reopened.attachments?.length ?? 0) === 0,
+        JSON.stringify(reopened?.attachments));
+      check('but the report itself survives', reopened.text.includes('scrolls instead'));
+    }
   }
 
   log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);

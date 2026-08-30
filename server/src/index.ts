@@ -13,6 +13,7 @@ import {
   type Room, type TurnHooks,
 } from './room.js';
 import { handView, canSacrifice, sacrificeReadyIn, canCastle, TUNING } from './cards.js';
+import { summariseGame } from './metrics.js';
 import { initArchive, saveGame, listGames, loadGame, toPgn } from './archive.js';
 import {
   initProfiles, touchProfile, recordGame, profileView, profileCount,
@@ -21,12 +22,13 @@ import {
   initAccounts, register, login, accountFromSession, accountCount,
 } from './accounts.js';
 import {
-  initReports, fileReport, listReports, setResolved, openCount, MAX_REPORT_CHARS,
+  initReports, fileReport, listReports, setResolved, openCount, readAttachment,
+  MAX_REPORT_CHARS,
 } from './reports.js';
 import type {
   Color, CreatePayload, JoinPayload, SeatTakePayload, SeatBotPayload,
   MovePayload, TakebackRespondPayload, DrawRespondPayload, JoinResult, You,
-  ChatSendPayload, MarkTogglePayload, GameResult, GameSummary, ProfileView,
+  ChatSendPayload, MarkTogglePayload, GameResult, GameSummary, GameMetrics, ProfileView,
   Account, AuthPayload, AuthResult, SessionPayload,
   BugReport, ReportPayload, AdminOverview,
 } from './types.js';
@@ -41,7 +43,13 @@ const CHAT_REFILL_MS = 2_000;
 
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer, { cors: { origin: '*' } });
+const io = new Server(httpServer, {
+  cors: { origin: '*' },
+  // A bug report can carry screenshots, and the default 1MB frame would drop the whole
+  // connection rather than the attachment -- a silent failure that looks like the report
+  // button being broken. The server still refuses anything oversized on its own terms.
+  maxHttpBufferSize: 12e6,
+});
 
 /** Occupied seats' names, in seat order -- who actually played for a side. */
 function rosterOf(room: Room, color: Color): string[] {
@@ -90,11 +98,34 @@ function finishGame(room: Room, result: GameResult, reason: string): void {
     finalFen: room.chess.fen(),
     result,
     reason,
+    metrics: gameMetricsFor(room, result),
   });
   if (!summary) return;
 
   creditPlayers(room, summary);
   io.to(room.id).emit('game:archived', summary);
+}
+
+/**
+ * Roll the per-ply record up, or return nothing when there is nothing to roll up.
+ *
+ * The check counts come from the history rather than from the metrics: a check lives in
+ * the SAN, and copying the SAN into every metric row to save one argument would be the
+ * worse trade.
+ */
+function gameMetricsFor(room: Room, result: GameResult): GameMetrics | undefined {
+  if (room.plyMetrics.length === 0) return undefined;
+
+  const checks = { white: 0, black: 0 };
+  for (const h of room.history) if (/[+#]$/.test(h.san)) checks[h.color]++;
+
+  // Time actually spent at the board, rather than wall clock: a room left open overnight
+  // between two moves did not take nine hours to play.
+  const durationMs = room.plyMetrics.reduce((a, p) => a + p.thinkMs, 0);
+
+  const winner = result === 'white' || result === 'black' ? result
+    : result === 'draw' ? 'draw' : null;
+  return summariseGame(room.plyMetrics, durationMs, checks, winner);
 }
 
 /**
@@ -601,6 +632,7 @@ io.on('connection', (socket: Socket) => {
     const report = fileReport({
       text: payload?.text,
       context: payload?.context,
+      attachments: payload?.attachments,
       accountId: data.account?.id ?? null,
       reporter: data.account?.username ?? data.name ?? 'Guest',
     });
@@ -608,7 +640,8 @@ io.on('connection', (socket: Socket) => {
       cb?.({ ok: false, error: `Say a little about what went wrong (up to ${MAX_REPORT_CHARS} characters).` });
       return;
     }
-    console.log(`[reports] ${report.id} from ${report.reporter}`);
+    console.log(`[reports] ${report.id} from ${report.reporter}`
+      + `${report.attachments?.length ? ` (+${report.attachments.length} image)` : ''}`);
     cb?.({ ok: true });
   });
 
@@ -632,6 +665,21 @@ io.on('connection', (socket: Socket) => {
     const limit = Number(payload?.limit);
     cb?.(listReports(Number.isFinite(limit) ? limit : 100));
   });
+
+  /**
+   * One screenshot, as base64, for an admin.
+   *
+   * Served over the socket rather than as a URL on purpose: a screenshot is somebody's
+   * screen, and an HTTP route would need the session in a query string -- which is the
+   * one place a credential ends up in logs and referrers. The socket already knows who is
+   * asking.
+   */
+  socket.on('admin:attachment',
+    (payload: { reportId?: string; attachmentId?: string } | undefined,
+     cb?: (res: { mime: string; base64: string } | null) => void) => {
+      if (!asAdmin() || !payload?.reportId || !payload?.attachmentId) { cb?.(null); return; }
+      cb?.(readAttachment(payload.reportId, payload.attachmentId));
+    });
 
   socket.on('admin:report-resolve',
     (payload: { id?: string; resolved?: boolean } | undefined,
