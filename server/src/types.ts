@@ -814,9 +814,17 @@ export interface ChatMessage {
 /** A square a teammate has flagged as interesting. Cleared whenever a ply is played. */
 export interface MarkView {
   square: string;
+  /**
+   * The far end, when the mark is an arrow rather than a highlight.
+   *
+   * One shape rather than two: an arrow is a mark with somewhere to point, and giving it
+   * its own event, its own store and its own lifetime would have been three copies of
+   * something that already clears itself at the end of every ply.
+   */
+  to?: string;
   name: string;
   own: boolean;   // computed per recipient
 }
 
 export interface ChatSendPayload { text: string; }
-export interface MarkTogglePayload { square: string; }
+export interface MarkTogglePayload { square: string; to?: string }

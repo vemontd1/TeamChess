@@ -309,7 +309,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
           + 'your turn opens.');
       }
     },
-    onMark: square => {
+    onMark: (square, to) => {
       const s = getState();
       if (!isSeated(s)) {
         toast('Only a seated player can mark squares');
@@ -321,7 +321,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
         toast('Marks belong to the live position — press Escape to come back');
         return;
       }
-      net.toggleMark(square);
+      net.toggleMark(square, to);
     },
   });
 
@@ -714,6 +714,17 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       s.you?.seat ? (s.you.seat.color === 'white' ? 'w' : 'b') : null);
     boardHost.classList.toggle('board-reviewing', !shown.live);
 
+    /*
+     * The queued move goes first, before the board is told anything.
+     *
+     * `setPremoveEnabled(false)` clears whatever is queued -- which is right, because a
+     * queue that outlives its turn is a move nobody asked for -- and the moment your turn
+     * opens that is exactly what it does. It ran eighty lines above the code that fires
+     * the queue, so by the time the room looked for a move to play there was never one
+     * there. Premoves have not worked since; reported as exactly that.
+     */
+    if (isMyTurn(s) && shown.live && premove && !firingPremove) void firePremove();
+
     // Queueing a reply is offered while the opponent thinks: your seat, a live game, the
     // live position, and nothing else already waiting on you.
     const canQueue = shown.live
@@ -801,9 +812,6 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     // Your move: screen bloom + board pulse + chime, once on the transition into
     // your turn. Not fired on the very first render after joining, which would
     // announce a turn the player has been sitting in the whole time.
-    // The turn is open and something was waiting for it.
-    if (isMyTurn(s) && shown.live && premove && !firingPremove) void firePremove();
-
     forgetHandOffGame(s);
     flushTurnReport(s);
     paintConstraint(s);

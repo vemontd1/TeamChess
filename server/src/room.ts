@@ -143,6 +143,13 @@ export interface Room {
 export interface TeamMarks {
   color: Color;
   name: string;
+  /**
+   * What this player has drawn on the board this ply.
+   *
+   * A square on its own is a highlight; `a1>h8` is an arrow between the two. One list,
+   * because the two have identical lives: both belong to one player, both are seen only
+   * by their own team, and both are wiped the moment a move is made.
+   */
   squares: string[];
 }
 
@@ -899,8 +906,13 @@ export function chatFor(room: Room, channel: ChatChannel): ChatMessage[] {
  * Toggle a square in this player's mark set. Only a seated player may mark -- a mark is a
  * suggestion to teammates, and a spectator has no team to suggest to.
  */
-export function toggleMark(room: Room, token: string, square: unknown): boolean {
+export function toggleMark(room: Room, token: string, square: unknown,
+                           to?: unknown): boolean {
   if (typeof square !== 'string' || !SQUARE_RE.test(square)) return false;
+  // An arrow has to point somewhere else; one that points at its own square is the
+  // highlight the player already has a gesture for.
+  const far = typeof to === 'string' && SQUARE_RE.test(to) && to !== square ? to : null;
+  const key = far ? `${square}>${far}` : square;
   const seat = seatByToken(room, token);
   if (!seat) return false;
 
@@ -912,9 +924,9 @@ export function toggleMark(room: Room, token: string, square: unknown): boolean 
   entry.color = seat.color;
   entry.name = seat.seat.name ?? 'Player';
 
-  const at = entry.squares.indexOf(square);
+  const at = entry.squares.indexOf(key);
   if (at >= 0) entry.squares.splice(at, 1);
-  else if (entry.squares.length < MAX_MARKS) entry.squares.push(square);
+  else if (entry.squares.length < MAX_MARKS) entry.squares.push(key);
   else return false;
 
   if (entry.squares.length === 0) room.marks.delete(token);
@@ -932,8 +944,9 @@ export function marksFor(room: Room, token: string): MarkView[] {
   const out: MarkView[] = [];
   for (const [owner, entry] of room.marks) {
     if (entry.color !== seat.color) continue;
-    for (const square of entry.squares) {
-      out.push({ square, name: entry.name, own: owner === token });
+    for (const mark of entry.squares) {
+      const [square, far] = mark.split('>');
+      out.push({ square, to: far, name: entry.name, own: owner === token });
     }
   }
   return out;

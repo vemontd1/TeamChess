@@ -11,7 +11,14 @@ export interface BoardCallbacks {
   /** Ask the UI for a promotion piece; resolve null to cancel the move. */
   requestPromotion: (color: 'w' | 'b') => Promise<string | null>;
   /** Flag a square for your team (right-click, or X on the keyboard). */
-  onMark?: (square: string) => void;
+  /**
+   * Flag a square for your team, or draw an arrow between two of them.
+   *
+   * Right-click a square for a highlight; right-drag from one square to another for an
+   * arrow. Both are wiped by the next move, which is what makes them usable mid-game:
+   * nothing drawn here has to be cleaned up by hand.
+   */
+  onMark?: (square: string, to?: string) => void;
   /**
    * A move chosen before it is this player's turn, or null when one is dropped.
    *
@@ -139,6 +146,8 @@ export class Board {
 
     this.root.addEventListener('pointerdown', this.onPointerDown);
     this.root.addEventListener('contextmenu', this.onContextMenu);
+    this.root.addEventListener('pointerdown', this.onRightDown);
+    this.root.addEventListener('pointerup', this.onRightUp);
     this.squaresLayer.addEventListener('keydown', this.onKeyDown);
     this.squaresLayer.addEventListener('focus', this.onFocus);
     this.squaresLayer.addEventListener('blur', this.onBlur);
@@ -543,9 +552,13 @@ export class Board {
     }
 
     // Teammates' suggestions, drawn under the move markers and in a cool colour so they
-    // never read as something the rules produced.
+    // never read as something the rules produced. An arrow is drawn rather than placed:
+    // it belongs to two squares and to the line between them.
+    this.renderArrows();
+
     const bySquare = new Map<string, MarkView[]>();
     for (const m of this.marks) {
+      if (m.to) continue;                       // an arrow, drawn above
       const list = bySquare.get(m.square);
       if (list) list.push(m); else bySquare.set(m.square, [m]);
     }
@@ -570,6 +583,68 @@ export class Board {
 
     if (this.kbActive && this.cursor) add(this.cursor, 'mk-cursor');
     this.labelSquares();
+  }
+
+  /**
+   * The arrows, in one SVG over the squares.
+   *
+   * Drawn in board coordinates -- eight units by eight -- so the same path is right at
+   * every board size and needs nothing recomputed when the window changes. The layer is
+   * rebuilt with the markers, which is often enough: marks change only when somebody
+   * draws one or a move wipes them all.
+   */
+  private renderArrows(): void {
+    const arrows = this.marks.filter(m => m.to);
+    if (arrows.length === 0) return;
+
+    const centre = (square: string): { x: number; y: number } => {
+      const file = FILES.indexOf(square[0]);
+      const rank = Number(square[1]) - 1;
+      const flip = this.orient === 'black';
+      return {
+        x: (flip ? 7 - file : file) + 0.5,
+        y: (flip ? rank : 7 - rank) + 0.5,
+      };
+    };
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'mk-arrows');
+    svg.setAttribute('viewBox', '0 0 8 8');
+    svg.setAttribute('aria-hidden', 'true');
+
+    for (const m of arrows) {
+      const a = centre(m.square);
+      const b = centre(m.to!);
+      // Stop short of the far square's centre so the head sits on the square rather than
+      // over the piece standing in it.
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const back = 0.28;
+      const tip = { x: b.x - (dx / len) * back, y: b.y - (dy / len) * back };
+
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', String(a.x));
+      line.setAttribute('y1', String(a.y));
+      line.setAttribute('x2', String(tip.x));
+      line.setAttribute('y2', String(tip.y));
+      line.setAttribute('class', `mk-arrow ${m.own ? 'mk-arrow-own' : ''}`);
+      svg.appendChild(line);
+
+      const head = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      const wing = 0.16;
+      const nx = -dy / len;
+      const ny = dx / len;
+      head.setAttribute('points', [
+        `${b.x - (dx / len) * 0.06},${b.y - (dy / len) * 0.06}`,
+        `${tip.x + nx * wing},${tip.y + ny * wing}`,
+        `${tip.x - nx * wing},${tip.y - ny * wing}`,
+      ].join(' '));
+      head.setAttribute('class', `mk-arrow-head ${m.own ? 'mk-arrow-own' : ''}`);
+      svg.appendChild(head);
+    }
+
+    this.markerLayer.appendChild(svg);
   }
 
   private selectSquare(square: string): void {
@@ -722,11 +797,34 @@ export class Board {
   // ---- interaction ----
 
   /** Right-click flags a square for your team; it never opens the browser menu here. */
-  private onContextMenu = (e: MouseEvent): void => {
+  /**
+   * The right button, from press to release.
+   *
+   * A press on one square and a release on another is an arrow; a press and release on
+   * the same square is the highlight it always was. The press is remembered here rather
+   * than in the context-menu handler because that one fires after the release and cannot
+   * tell where the gesture began.
+   */
+  private markFrom: string | null = null;
+
+  private onRightDown = (e: PointerEvent): void => {
+    if (e.button !== 2) return;
+    this.markFrom = this.squareFromPoint(e.clientX, e.clientY);
+  };
+
+  private onRightUp = (e: PointerEvent): void => {
+    if (e.button !== 2) return;
+    const from = this.markFrom;
+    this.markFrom = null;
     const square = this.squareFromPoint(e.clientX, e.clientY);
-    if (!square) return;
+    if (!from || !square) return;
     e.preventDefault();
-    this.cb.onMark?.(square);
+    this.cb.onMark?.(from, from === square ? undefined : square);
+  };
+
+  private onContextMenu = (e: MouseEvent): void => {
+    // The menu is never wanted on a board; the gesture it interrupts is the arrow above.
+    e.preventDefault();
   };
 
   private onPointerDown = (e: PointerEvent): void => {
@@ -847,6 +945,9 @@ export class Board {
   }
 
   destroy(): void {
+    this.root.removeEventListener('contextmenu', this.onContextMenu);
+    this.root.removeEventListener('pointerdown', this.onRightDown);
+    this.root.removeEventListener('pointerup', this.onRightUp);
     this.squaresLayer.removeEventListener('keydown', this.onKeyDown);
     this.squaresLayer.removeEventListener('blur', this.onBlur);
     window.removeEventListener('pointermove', this.onPointerMove);

@@ -269,6 +269,12 @@ against, so a tuning change cannot pass in one place and fail in the other.
 
 `docs/METRICS.md` is the full taxonomy and what is still to come.
 
+## Drawing on the board
+
+Right-click a square to flag it for your team; right-drag from one square to another for an
+arrow. Both are seen only by your own side, and both are wiped by the next move — so
+nothing drawn mid-game has to be cleaned up by hand.
+
 ## Friends
 
 Sign in, add somebody by the name they signed up with, and once they have accepted you can

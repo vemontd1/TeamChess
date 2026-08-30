@@ -1105,7 +1105,7 @@ io.on('connection', (socket: Socket) => {
     const room = roomOf();
     const token = data.token;
     if (!room || !token) return;
-    if (toggleMark(room, token, payload?.square)) void pushMarks(room);
+    if (toggleMark(room, token, payload?.square, payload?.to)) void pushMarks(room);
   });
 
   socket.on('mark:clear', () => {

@@ -135,7 +135,10 @@ export function takeSeat(color: Color, seatId?: number): Promise<JoinResult> {
 
 export function leaveSeat(): void { sock().emit('seat:leave'); }
 export function sendChat(text: string): void { sock().emit('chat:send', { text }); }
-export function toggleMark(square: string): void { sock().emit('mark:toggle', { square }); }
+/** A highlight on one square, or -- with `to` -- an arrow between two. */
+export function toggleMark(square: string, to?: string): void {
+  sock().emit('mark:toggle', { square, to });
+}
 export function clearMarks(): void { sock().emit('mark:clear'); }
 /** Add a bot to a side (no seat named), or take a named bot back out. */
 export function setSeatBot(color: Color, seatId: number | undefined, bot: boolean): void {

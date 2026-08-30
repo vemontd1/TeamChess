@@ -2,6 +2,7 @@ import { createRoom, getName, setName } from '../net/socket';
 import { sfx, unlockAudio } from '../audio/sfx';
 import { toast } from './widgets';
 import { Slider, Segmented, toggle } from './controls';
+import { ModeTiles } from './modeTiles';
 import { renderAppBar, bindAppBar } from './appbar';
 import { getState } from '../state/store';
 
@@ -40,7 +41,6 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
             </div>
 
             <div id="mode-slot"></div>
-            <p class="mode-blurb" id="mode-blurb"></p>
 
             <div id="team-slot"></div>
             <div id="timer-slot"></div>
@@ -84,35 +84,23 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
   const nm = root.querySelector<HTMLInputElement>('#nm')!;
   const code = root.querySelector<HTMLInputElement>('#code')!;
 
-  const MODE_BLURB: Record<string, string> = {
-    team: 'Your team shares one side. Teammates move in turn, and the clock waits '
-        + 'for nobody.',
-    cards: 'One against one. You may only move a piece you hold a card for — the king '
-         + 'excepted, and he is always free.',
-  };
-
   const modeSlot = root.querySelector<HTMLElement>('#mode-slot')!;
-  const blurb = root.querySelector<HTMLElement>('#mode-blurb')!;
   const teamSlot = root.querySelector<HTMLElement>('#team-slot')!;
   const skipOpt = root.querySelector<HTMLElement>('#skip-opt')!;
 
   // Chess Cards is a duel, so the roster size and the empty-seat rule have nothing to say
   // in it; both are hidden rather than left sitting there inert.
   const paintMode = (mode: string): void => {
-    blurb.textContent = MODE_BLURB[mode];
+    // The blurb rides on the tile now, so this only has to hide what a duel has no use
+    // for: a roster size, and a rule about empty seats.
     const solo = mode === 'cards';
     teamSlot.hidden = solo;
     skipOpt.hidden = solo;
   };
 
-  const mode = new Segmented({
-    options: [
-      { value: 'team', label: 'Team Chess' },
-      { value: 'cards', label: 'Chess Cards' },
-    ],
-    value: 'team',
-    onChange: v => { paintMode(v); sfx.click(); },
-  });
+  // Two tiles rather than two words: the mode is the only choice on this screen that
+  // changes what the game is, and each tile carries its own picture and its own sentence.
+  const mode = new ModeTiles({ value: 'team', onChange: paintMode });
   modeSlot.innerHTML = `<span class="label">Game mode</span>`;
   modeSlot.appendChild(mode.el);
 
@@ -154,7 +142,7 @@ export function renderHome(root: HTMLElement, onGo: (roomId: string) => void): v
     const name = saveName();
     const secs = timer.value;
     const roomId = await createRoom(name, {
-      mode: mode.value as 'team' | 'cards',
+      mode: mode.selected as 'team' | 'cards',
       teamSize: Number(teamSize.value),
       moveTimerSec: secs > 0 ? secs : null,
       skipEmptySeats: root.querySelector<HTMLInputElement>('#skip')!.checked,

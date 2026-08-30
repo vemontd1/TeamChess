@@ -993,3 +993,84 @@ a.btn {
 }
 .invite-who b { color: var(--text); }
 .invite-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+
+/* ---- the mode tiles ---------------------------------------------------------
+   The first decision anyone makes here, and the only one that changes what the game is,
+   so it gets a picture and a sentence rather than a word in a segmented control. */
+
+.mode-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(10px * var(--ui));
+  margin-top: 4px;
+}
+
+.mode-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: calc(12px * var(--ui));
+  border-radius: var(--radius);
+  border: 1px solid var(--panel-edge);
+  background:
+    radial-gradient(120% 100% at 50% 0%, rgba(232, 176, 75, 0.05), transparent 70%),
+    linear-gradient(170deg, #1A1815, #131211);
+  color: var(--text-faint);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    border-color var(--dur-ui) var(--ease-out),
+    background var(--dur-ui) var(--ease-out),
+    transform var(--dur-ui) var(--ease-out);
+}
+.mode-tile:hover { border-color: var(--panel-edge-strong); transform: translateY(-2px); }
+.mode-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The art sits behind the words rather than beside them: a picture that has to share a
+   row with a paragraph ends up too small to be a picture at all. */
+.mt-figure {
+  position: absolute;
+  right: calc(-10px * var(--ui));
+  top: calc(2px * var(--ui));
+  width: calc(112px * var(--ui));
+  color: var(--text-faint);
+  /* A watermark, not an illustration competing with the sentence over it. */
+  opacity: 0.13;
+  pointer-events: none;
+  transition: opacity var(--dur-ui) var(--ease-out), color var(--dur-ui) var(--ease-out);
+}
+.mt-art { display: block; width: 100%; height: auto; }
+
+.mt-title {
+  position: relative;
+  font-family: var(--font-display);
+  font-size: calc(19px * var(--ui));
+  color: var(--text-dim);
+}
+.mt-blurb {
+  position: relative;
+  font-size: calc(11.5px * var(--ui));
+  line-height: 1.5;
+  color: var(--text-faint);
+  max-width: 26ch;
+}
+
+.mode-tile[aria-checked="true"] {
+  border-color: var(--accent-dim);
+  background:
+    radial-gradient(120% 100% at 50% 0%, rgba(232, 176, 75, 0.12), transparent 70%),
+    linear-gradient(170deg, #211D17, #16130F);
+}
+.mode-tile[aria-checked="true"] .mt-title { color: var(--accent); }
+.mode-tile[aria-checked="true"] .mt-blurb { color: var(--text-dim); }
+.mode-tile[aria-checked="true"] .mt-figure { color: var(--accent); opacity: 0.30; }
+
+@media (max-width: 640px) {
+  .mode-tiles { grid-template-columns: minmax(0, 1fr); }
+  .mt-figure { width: calc(96px * var(--ui)); opacity: 0.13; }
+}

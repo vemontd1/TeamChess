@@ -388,6 +388,37 @@ async function main() {
   await sleep(150);
   check('a played ply clears the marks', c2.marks.length === 0, JSON.stringify(c2.marks));
 
+  // An arrow is a mark with somewhere to point: same event, same team scoping, same life.
+  c1.emit('mark:toggle', { square: 'g1', to: 'f3' });
+  await sleep(150);
+  check('an arrow reaches teammates with both of its ends',
+    c2.marks.length === 1 && c2.marks[0].square === 'g1' && c2.marks[0].to === 'f3',
+    JSON.stringify(c2.marks));
+  check('and the opposing team still sees nothing', c3.marks.length === 0,
+    JSON.stringify(c3.marks));
+
+  c1.emit('mark:toggle', { square: 'g1', to: 'f3' });
+  await sleep(150);
+  check('drawing the same arrow again takes it back', c1.marks.length === 0,
+    JSON.stringify(c1.marks));
+
+  c1.emit('mark:toggle', { square: 'b1', to: 'b1' });
+  await sleep(150);
+  check('an arrow to its own square is just a highlight',
+    c1.marks.length === 1 && c1.marks[0].to === undefined, JSON.stringify(c1.marks));
+
+  c1.emit('mark:toggle', { square: 'c1', to: 'zz' });
+  await sleep(150);
+  check('and a nonsense far end leaves a highlight rather than a bad arrow',
+    c1.marks.length === 2 && c1.marks.every(m => m.to === undefined),
+    JSON.stringify(c1.marks));
+
+  // The other side is on the clock now, so the ply that clears the board is theirs.
+  await emitCb(c3, 'game:move', { from: 'e7', to: 'e5' });
+  await sleep(250);
+  check('the next move wipes arrows as well as highlights', c1.marks.length === 0,
+    JSON.stringify(c1.marks));
+
   log('\n=== 13. The clock is sent as a duration, not just an epoch ===');
   // A client that subtracts an absolute server deadline from its own Date.now() gets a
   // wrong countdown the moment the two clocks disagree, which is what happened in
