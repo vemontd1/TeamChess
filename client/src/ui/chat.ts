@@ -1,8 +1,14 @@
-import { escapeHtml } from './timerRing';
+import { escapeHtml } from '../util/format';
 import type { ChatMessage, ChatChannel } from '../types';
 
 /**
- * Team chat.
+ * Team chat -- or the spectators' channel, which is the same panel with every label
+ * changed.
+ *
+ * Changed, and not merely tagged: a spectator was shown a panel headed "Team chat", with
+ * "Only your team can read this" written across it and a hint about marking squares they
+ * are not allowed to mark, above an input placeheld "Message other spectators…". Every
+ * one of those is a small lie, and a reader who catches one stops believing the rest.
  *
  * The panel is built once and only ever appended to. Re-rendering it from state on every
  * broadcast -- which is how the rest of this UI works -- would wipe whatever the player
@@ -24,6 +30,22 @@ const CHANNEL_LABEL: Record<ChatChannel, string> = {
   spectator: 'Spectators',
 };
 
+/** What the panel is called, who can read it, and what to type into it. */
+const VOICE = {
+  team: {
+    title: 'Team chat',
+    empty: 'Only your team can read this',
+    placeholder: 'Message your team…',
+    aria: 'Team chat messages',
+  },
+  spectator: {
+    title: 'Spectator chat',
+    empty: 'Only other spectators can read this',
+    placeholder: 'Message other spectators…',
+    aria: 'Spectator chat messages',
+  },
+} as const;
+
 export class ChatPanel {
   readonly el: HTMLElement;
   private log: HTMLElement;
@@ -33,8 +55,11 @@ export class ChatPanel {
   private quick: HTMLElement;
   private handlers: ChatHandlers;
 
+  private titleEl: HTMLElement;
+  private hint: HTMLElement;
   private rendered: ChatMessage[] = [];
   private youName = '';
+  private voice: typeof VOICE[keyof typeof VOICE] = VOICE.team;
 
   constructor(handlers: ChatHandlers) {
     this.handlers = handlers;
@@ -42,7 +67,7 @@ export class ChatPanel {
     this.el.className = 'panel edge chat';
     this.el.innerHTML = `
       <div class="panel-head">
-        <span class="panel-title">Team chat</span>
+        <span class="panel-title" id="chat-title">Team chat</span>
         <span class="chat-tag" id="chat-tag">Spectators</span>
       </div>
       <div class="chat-log" id="chat-log" role="log" aria-live="polite"
@@ -57,11 +82,13 @@ export class ChatPanel {
                placeholder="Message your team…" aria-label="Message your team">
         <button class="btn btn-sm btn-primary" type="submit" id="chat-send">Send</button>
       </form>
-      <div class="chat-hint">
+      <div class="chat-hint" id="chat-hint">
         Right-click a square — or press <b>X</b> — to mark it for your team.
       </div>`;
 
     this.log = this.el.querySelector('#chat-log')!;
+    this.titleEl = this.el.querySelector('#chat-title')!;
+    this.hint = this.el.querySelector('#chat-hint')!;
     this.tag = this.el.querySelector('#chat-tag')!;
     this.input = this.el.querySelector('#chat-input')!;
     this.send = this.el.querySelector('#chat-send')!;
@@ -87,12 +114,19 @@ export class ChatPanel {
   }
 
   setChannel(channel: ChatChannel, seated: boolean): void {
+    this.voice = seated ? VOICE.team : VOICE.spectator;
     this.tag.textContent = CHANNEL_LABEL[channel];
     this.tag.className = `chat-tag chat-tag-${channel}`;
     this.el.classList.toggle('chat-spectating', !seated);
-    this.input.placeholder = seated
-      ? 'Message your team…'
-      : 'Message other spectators…';
+    this.titleEl.textContent = this.voice.title;
+    this.input.placeholder = this.voice.placeholder;
+    this.input.setAttribute('aria-label', this.voice.placeholder);
+    this.log.setAttribute('aria-label', this.voice.aria);
+    // Marking a square is a seated player's move to make, so the hint that explains it
+    // only belongs on a panel a seated player is reading.
+    this.hint.hidden = !seated;
+    const empty = this.log.querySelector('.empty-note');
+    if (empty) empty.textContent = this.voice.empty;
   }
 
   setEnabled(connected: boolean): void {
@@ -121,7 +155,8 @@ export class ChatPanel {
     this.rendered = msgs.slice();
 
     if (this.rendered.length === 0) {
-      this.log.innerHTML = `<div class="empty-note">Only your team can read this</div>`;
+      this.log.innerHTML =
+        `<div class="empty-note">${escapeHtml(this.voice.empty)}</div>`;
     } else if (nearBottom) {
       this.log.scrollTop = this.log.scrollHeight;
     }

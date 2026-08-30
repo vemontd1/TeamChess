@@ -466,8 +466,20 @@
 
 @keyframes fade { from { opacity: 0; } }
 
+/*
+ * Never taller than the window.
+ *
+ * The host is fixed and centred, so a modal that outgrows the viewport does not push the
+ * page down -- it hangs off both ends with its top and bottom unreachable, which is what
+ * a fifty-move game did to the review window and what was reported as "scroll not working
+ * correctly when viewing match". The cap is here rather than on the one modal that grew,
+ * because any of them can grow.
+ */
 .modal {
   width: min(calc(420px * var(--ui)), calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--panel);
   border: 1px solid var(--panel-edge-strong);
   border-radius: var(--radius);
@@ -533,8 +545,20 @@
    A finished game, board and move list side by side. Wider than an ordinary modal
    because it is the only one that has to hold a board. */
 
+/*
+ * The review window: a column that fits the viewport, with the scrolling pushed inwards.
+ *
+ * The head stays put, the board stays put, and the move list -- the only part that grows
+ * with the game -- scrolls inside its own pane. `min-height: 0` on every ancestor of that
+ * pane is what lets it: a flex child will not shrink below its content without it, so
+ * without those the list simply pushed the window open again.
+ */
 .modal-wide {
   width: min(calc(880px * var(--ui)), calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   padding: 20px;
   text-align: left;
 }
@@ -564,19 +588,41 @@
   display: flex;
   gap: 18px;
   align-items: flex-start;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .viewer-board { flex: 0 0 auto; }
 
 .viewer-side {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
 }
-.viewer-moves { flex: 1 1 auto; min-height: calc(200px * var(--ui)); }
+/*
+ * The move list is bounded here rather than by the flex chain above it.
+ *
+ * The modal is a centred grid item, and a max-height on a flex container in that position
+ * does not make its children shrink into it: the list kept its full 1,976px, the modal
+ * clipped it, and a sixty-five move game opened with its head and its board scrolled out
+ * of sight. A viewport-relative cap on the pane that actually grows needs nothing from
+ * its ancestors and cannot be undone by one of them.
+ */
+/* Two classes, not one: the room's own move list is `.moves { max-height: none }`, which
+   lives in a stylesheet imported after this one and outranks a single-class rule here on
+   source order alone. The list in the review window carries both classes, so it needs the
+   heavier selector to keep its ceiling. */
+.viewer-side .viewer-moves {
+  flex: 1 1 auto;
+  min-height: calc(140px * var(--ui));
+  max-height: min(56vh, calc(100vh - 330px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .viewer-foot {
   padding: 10px 12px;
   border-top: 1px solid var(--line);
@@ -588,7 +634,7 @@
 @media (max-width: 900px) {
   .viewer-body { flex-direction: column; align-items: stretch; }
   .viewer-board { align-self: center; }
-  .viewer-moves { max-height: calc(200px * var(--ui)); }
+  .viewer-side .viewer-moves { max-height: calc(200px * var(--ui)); }
 }
 
 

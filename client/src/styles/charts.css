@@ -421,7 +421,13 @@
 }
 
 /* The report shares the viewer window with the replay, and is the taller of the two. */
-.viewer-report { max-height: 72vh; overflow-y: auto; padding-right: 6px; }
+/* Same reasoning as the move list: bounded against the viewport, not against a flex
+   ancestor that will not shrink. */
+.viewer-report {
+  max-height: min(72vh, calc(100vh - 190px));
+  overflow-y: auto;
+  padding-right: 6px;
+}
 .viewer-views { display: flex; gap: 4px; margin-left: auto; margin-right: 8px; }
 .viewer-view {
   padding: 4px 12px;

@@ -163,8 +163,8 @@ export function renderProfile(root: HTMLElement, account: Account): () => void {
     const name = view?.profile.name ?? account.username;
     const rec = view?.profile.record ?? { wins: 0, losses: 0, draws: 0 };
     const games = view?.games ?? [];
-    const activity = view?.activity ?? {};
-    const act = summarise(activity);
+    const playedAt = view?.playedAt ?? [];
+    const act = summarise(playedAt);
 
     const played = rec.wins + rec.losses + rec.draws;
     const decisive = rec.wins + rec.losses;
@@ -237,7 +237,7 @@ export function renderProfile(root: HTMLElement, account: Account): () => void {
             <span class="act-sub">${act.total} ${act.total === 1 ? 'game' : 'games'}
               in the last year</span>
           </div>
-          ${renderActivityGrid(activity)}
+          ${renderActivityGrid(playedAt)}
         </section>`}
 
         <section class="panel edge games-panel">

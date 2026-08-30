@@ -1,4 +1,4 @@
-import { escapeHtml } from './timerRing';
+import { escapeHtml } from '../util/format';
 
 /**
  * A year of play, one square per day — the shape GitHub uses for commits.
@@ -8,8 +8,13 @@ import { escapeHtml } from './timerRing';
  * evening in March and have not been back since, which is the more interesting fact.
  *
  * Weeks are columns and days are rows, aligned so the grid always ends on today's column.
- * Counts come from the server keyed by local date, so a game played at 11pm lands on the
- * day the player thinks they played it rather than on the next UTC one.
+ *
+ * **The day is decided here, not on the server.** The server has no idea what clock the
+ * person reading this grid is on, and a game finished at 01:24 UTC was played at half
+ * nine the previous evening in New York. Counting days server-side therefore lit a square
+ * its player had not played on and left the one they had dark -- reported, correctly, as
+ * "matches are not shown for the current date". So the server sends the moments and the
+ * browser, which knows the timezone, sorts them into days.
  */
 
 const DAY_MS = 86_400_000;
@@ -40,7 +45,19 @@ export interface ActivitySummary {
   streak: number;
 }
 
-export function summarise(activity: Record<string, number>): ActivitySummary {
+/** Timestamps to a local-date tally: the one place a day is decided. */
+export function bucketByDay(playedAt: number[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const at of playedAt) {
+    if (!Number.isFinite(at)) continue;
+    const k = key(new Date(at));
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
+}
+
+export function summarise(playedAt: number[]): ActivitySummary {
+  const activity = bucketByDay(playedAt);
   const entries = Object.entries(activity).filter(([, n]) => n > 0);
   let total = 0;
   let busiest: ActivitySummary['busiest'] = null;
@@ -60,7 +77,8 @@ export function summarise(activity: Record<string, number>): ActivitySummary {
   return { total, activeDays: entries.length, busiest, streak };
 }
 
-export function renderActivityGrid(activity: Record<string, number>): string {
+export function renderActivityGrid(playedAt: number[]): string {
+  const activity = bucketByDay(playedAt);
   const today = new Date();
   today.setHours(12, 0, 0, 0);
 

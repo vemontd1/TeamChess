@@ -18,15 +18,18 @@
   flex-direction: column;
   gap: 7px;
   margin-top: 10px;
-  --card-w: calc(66px * var(--ui));
-  --card-h: calc(92px * var(--ui));
+  /* Grown from 66x92 after "skills are too tiny": at arm's length on a large monitor the
+     pip and the piece under it were both guesswork. The hand is the thing you play with;
+     it can afford the room. */
+  --card-w: calc(86px * var(--ui));
+  --card-h: calc(120px * var(--ui));
   /* Per-kind accent. Scarcer cards run hotter, so the deck's shape is legible on the
      table: ten pawns are bronze, three queens are full gold. */
   --tint: var(--text-faint);
   --tint-soft: rgba(138, 131, 120, 0.18);
 }
 
-/* ---- the opponent's side of the table ---- */
+/* ---- the table: what both sides can see ---- */
 
 .cards-opp {
   display: flex;
@@ -38,22 +41,25 @@
 }
 
 .opp-row { display: flex; align-items: center; gap: 9px; }
+/* Sentences rather than shouted labels: these read "Black holds", "You have spent", and
+   uppercased letterspacing at 9.5px turned each of them into a puzzle. */
 .opp-label, .spent-label {
-  font-size: calc(9.5px * var(--ui));
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--text-faint);
+  font-size: calc(11.5px * var(--ui));
+  letter-spacing: 0.01em;
+  color: var(--text-dim);
   flex: 0 0 auto;
-  min-width: 62px;
+  min-width: calc(96px * var(--ui));
 }
 .opp-backs { display: flex; gap: 2px; flex: 1; min-width: 0; flex-wrap: wrap; }
 .opp-none { color: var(--text-faint); font-style: italic; }
-.opp-count {
-  font-family: var(--font-display);
-  font-size: calc(15px * var(--ui));
-  color: var(--accent);
+.opp-count, .spent-count {
+  font-size: calc(11px * var(--ui));
+  color: var(--text-faint);
   flex: 0 0 auto;
+  margin-left: auto;
+  white-space: nowrap;
 }
+.opp-count { color: var(--accent); font-size: calc(12px * var(--ui)); }
 
 /* A card back reads as a card without being one: same proportion, no face. Each deals in
    on its own beat, so an opponent drawing is motion on their side of the table rather
@@ -76,7 +82,8 @@
   from { opacity: 0; transform: translateY(-7px) rotate(-9deg); }
 }
 
-.spent-row { display: flex; align-items: center; gap: 9px; min-height: 20px; }
+.spent-row { display: flex; align-items: center; gap: 9px; min-height: calc(20px * var(--ui)); }
+.spent-row .spent-pip:first-of-type { margin-left: 0; }
 .spent-pip {
   width: calc(17px * var(--ui)); height: calc(17px * var(--ui));
   opacity: 0.75;
@@ -99,14 +106,39 @@
   from { opacity: 0; transform: translateY(4px) scale(0.7); }
 }
 
+/* Four facts about the table, each written as one. They used to read "Deck 26 Deal 2
+   Cap 7 Sacrifice 3" -- four numbers with no units and no verbs, and a report that said,
+   fairly, "not informative hard to understand". */
 .cards-meta {
   display: flex;
-  gap: 14px;
-  font-size: calc(10.5px * var(--ui));
+  flex-wrap: wrap;
+  gap: calc(6px * var(--ui)) calc(10px * var(--ui));
+  margin-top: calc(4px * var(--ui));
+  padding-top: calc(8px * var(--ui));
+  border-top: 1px solid rgba(232, 176, 75, 0.10);
+  font-size: calc(11px * var(--ui));
   color: var(--text-faint);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.01em;
 }
+.cards-meta span {
+  padding: calc(2px * var(--ui)) calc(8px * var(--ui));
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(232, 176, 75, 0.09);
+}
+.cards-meta b { color: var(--text-dim); font-weight: 600; }
 .meta-hot { color: var(--danger); }
+.meta-shrunk { color: var(--accent); }
+
+/* The buttons that live under the clock: about the game, never about the position. */
+.game-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(7px * var(--ui));
+  justify-content: center;
+  padding: 0 calc(14px * var(--ui)) calc(13px * var(--ui));
+}
+.game-actions[hidden] { display: none; }
 
 /* ---- the line that says what the hand can do right now ---- */
 
@@ -140,9 +172,47 @@
   justify-content: center;
   align-items: flex-end;
   flex-wrap: wrap;
-  min-height: calc(var(--card-h) + 10px);
-  padding-top: 10px;          /* headroom for the lift, so a raised card is not clipped */
+  min-height: calc(var(--card-h) + 22px);
+  padding-top: 14px;          /* headroom for the lift, so a raised card is not clipped */
   perspective: 900px;         /* the deal arrives with a real tilt, not a flat slide */
+  --n: 1;
+}
+
+/*
+ * The fan.
+ *
+ * A hand of cards is held as a fan, and a row of upright rectangles reads as a toolbar --
+ * which is what it was called in the report that asked for this. Each card is turned by
+ * its distance from the middle of the hand and dropped by the square of it, so the tops
+ * describe an arc rather than a line, and they overlap slightly the way cards do.
+ *
+ * `--i` is set per card and `--n` on the hand, so the geometry is here rather than in the
+ * TypeScript: the shape of a fan is a question for a stylesheet.
+ */
+.cards-hand .card {
+  --mid: calc((var(--n) - 1) / 2);
+  --off: calc(var(--i, 0) - var(--mid));
+  transform:
+    rotate(calc(var(--off) * 4deg))
+    translateY(calc(var(--off) * var(--off) * 2.5px));
+  margin-inline: calc(var(--card-w) * -0.06);
+  z-index: calc(10 + var(--i, 0));
+}
+
+/* Picked up, or under the pointer: straightened and lifted clear of its neighbours, which
+   is also what makes the whole face readable at the moment it matters. */
+.cards-hand .card:hover:not(.card-dead):not(.card-spent),
+.cards-hand .card:focus-visible,
+.cards-hand .card-on,
+.cards-hand .card-burn {
+  transform: rotate(0deg) translateY(-12px);
+  z-index: 40;
+}
+
+/* Wrapping and fanning do not mix: a second row of a fan is two fans. */
+@media (max-width: 780px) {
+  .cards-hand { flex-wrap: nowrap; }
+  .cards-hand .card { --off: 0; margin-inline: calc(var(--card-w) * -0.04); }
 }
 
 .card {
@@ -278,7 +348,7 @@
 /* ---- states ---- */
 
 .card:hover:not(.card-dead):not(.card-spent) {
-  transform: translateY(-7px);
+  transform: translateY(-9px);
   border-color: var(--tint);
   box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
   color: var(--text);

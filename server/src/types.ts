@@ -308,13 +308,18 @@ export interface ProfileView {
   profile: Profile;
   games: ProfileGame[];
   /**
-   * Games finished per day, keyed `YYYY-MM-DD`, for the activity grid.
+   * When each remembered game finished, newest last, for the activity grid.
    *
-   * Counted as games are recorded rather than derived from `games`, so the grid keeps
-   * counting after a game has fallen off the end of the list -- the list is capped, and a
-   * year of play would otherwise show a heatmap that quietly emptied from the left.
+   * Timestamps rather than day keys, and that is the whole point: which day a game
+   * belongs to is a question about the *player's* clock, not the server's. Counting days
+   * server-side put a game played at nine in the evening in New York on the following
+   * day, so the grid lit a square the player had not played on and left the one they had
+   * dark. The bucketing therefore happens in the browser, where the timezone is known.
+   *
+   * Kept as its own list rather than read off `games`, because that list is capped and a
+   * year of play would otherwise show a grid that quietly emptied from the left.
    */
-  activity: Record<string, number>;
+  playedAt: number[];
 }
 
 // --- metrics ---

@@ -168,6 +168,31 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   const heightOf = (el: HTMLElement | null): number =>
     el && !el.hidden ? el.getBoundingClientRect().height : 0;
 
+  /**
+   * Everything in the board's column that is not the board, gaps included.
+   *
+   * Measured off the column itself rather than added up from a list of its children,
+   * which is what this did and what kept going wrong: every row added since -- the card
+   * table, the constraint line -- had to be remembered here as well, and when one was
+   * not, the column grew past the window and the whole desktop page began to scroll.
+   * A subtraction cannot forget a child.
+   */
+  const besideBoard = (): number => {
+    const col = boardHost.parentElement;
+    if (!col) return 0;
+    // The column's own height is no use here: it is a stretched grid item, so it is as
+    // tall as the row whatever is in it. What is wanted is the height of its *contents*
+    // other than the board, so the children are walked -- generically, so that a row
+    // added later is counted without anyone having to remember this function exists.
+    const kids = [...col.children].filter(
+      (el): el is HTMLElement => el instanceof HTMLElement && !el.hidden);
+    const shown = kids.filter(el => el.getBoundingClientRect().height > 0);
+    const gap = parseFloat(getComputedStyle(col).rowGap) || 0;
+    let total = shown.length > 1 ? gap * (shown.length - 1) : 0;
+    for (const el of shown) if (el !== boardHost) total += el.getBoundingClientRect().height;
+    return total;
+  };
+
   const sizeBoard = (): void => {
     const ui = uiScale();
     const w = window.innerWidth;
@@ -178,8 +203,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     if (onPhone) {
       const pad = 20;
       const topbar = heightOf(root.querySelector<HTMLElement>('.topbar'));
-      const others = heightOf(phoneTop) + heightOf(cardsHost) + heightOf(controls);
-      const availH = window.innerHeight - topbar - others - pad * 2 - 24;
+      const availH = window.innerHeight - topbar - besideBoard() - pad * 2 - 24;
       const size = Math.max(240, Math.min(w - pad, availH));
       boardHost.style.setProperty('--board-size', `${Math.round(size)}px`);
       return;
@@ -194,12 +218,10 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
     // height: everything else in the board column, measured
     const topbar = heightOf(root.querySelector<HTMLElement>('.topbar'));
-    const siblings = heightOf(trayEl.closest('.panel'))
-      + heightOf(cardsHost) + heightOf(controls);
-    const colGaps = 16 * ui * 2;
-    const measured = window.innerHeight - topbar - siblings - colGaps - pagePad;
+    const others = besideBoard();
+    const measured = window.innerHeight - topbar - others - pagePad;
     // before the first paint the measurements are zero; fall back to a sane guess
-    const availH = siblings > 0 ? measured : window.innerHeight - 260 * ui;
+    const availH = others > 0 ? measured : window.innerHeight - 260 * ui;
 
     // Two ceilings: never more than 84% of the window height, so the board is never the
     // only thing on screen, and a generous absolute cap that itself grows with the scale.
@@ -443,6 +465,18 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   timerPanel.className = 'panel edge sheen panel-fire';
   timerPanel.appendChild(timer.el);
 
+  /**
+   * Resign, offer a draw, ask for a takeback, go back to the lobby.
+   *
+   * Under the clock rather than under the board, which is where a player asked for them:
+   * they are about the game rather than about the position, they are never urgent, and
+   * every pixel they took under the board was a pixel of board. What stays down there is
+   * the one button that moves the game on -- Start, or Rematch.
+   */
+  const gameActions = document.createElement('div');
+  gameActions.className = 'btn-row game-actions';
+  timerPanel.appendChild(gameActions);
+
   rosterStack.append(whitePanel.el, blackPanel.el);
   chat.el.classList.add('panel-grow');
   // In cards mode the chat goes (a team of one has no audience) and the table takes its
@@ -628,8 +662,13 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       sizeBoard();
     }
 
-    cardsHost.hidden = !cardsMode;
-    cardHand.infoEl.hidden = !cardsMode;
+    // The hand and the table appear when there is a deal to show. In the lobby there is
+    // no hand and no discard -- the deck is not cut until the game starts -- so what stood
+    // here was an empty card-height box between the board and the buttons, reported as
+    // "area looks wrongly formatted". It was: it was an area of nothing.
+    const dealt = cardsMode && (s.hand != null || room.cards != null);
+    cardsHost.hidden = !dealt;
+    cardHand.infoEl.hidden = !dealt;
     if (isCardsMode(s)) {
       cardHand.render(s.hand, room.cards, s.you?.seat?.color ?? null);
       applyReach();
@@ -746,6 +785,14 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       if (s.soundOn) playEndgame(room, s.you?.seat?.color ?? null);
     }
     if (room.status !== lastStatus) { lastStatus = room.status; }
+
+    // The board takes whatever the column has left, and what the column has left changes
+    // with the state -- the hand appears when the game starts, the constraint line comes
+    // and goes with the turn, the button row empties. Sizing only on resize meant the
+    // board kept a height that was correct for a lobby and 148px too tall for a game,
+    // and the desktop page scrolled: reported as "scroll on the full screen page
+    // computer wrong". Measuring is cheap; guessing when to measure was the mistake.
+    sizeBoard();
   }
 
   const reviewBar = root.querySelector<HTMLElement>('#reviewbar')!;
@@ -786,54 +833,71 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   reviewBar.querySelector('#rvlast')!.addEventListener('click', () => step(null));
   reviewBar.querySelector('#rvlive')!.addEventListener('click', () => step(null));
 
+  /**
+   * Two rows, split by what they are for.
+   *
+   * `main` is the one thing the game is waiting on -- start it, play it again -- and sits
+   * under the board where the eye already is. `manage` is everything about the game
+   * rather than the position, and sits under the clock.
+   */
   function renderControls(s: AppState, isHost: boolean): void {
     const room = s.room!;
-    const parts: string[] = [];
+    const main: string[] = [];
+    const manage: string[] = [];
 
     if (room.status === 'lobby') {
       if (isHost) {
         const ready = room.white.seats.some(x => x.occupied)
           && room.black.seats.some(x => x.occupied);
-        parts.push(`<button class="btn btn-primary" id="start" ${ready ? '' : 'disabled'}>
+        main.push(`<button class="btn btn-primary" id="start" ${ready ? '' : 'disabled'}>
           ${ready ? 'Start game' : 'Need a player on each team'}</button>`);
       } else {
-        parts.push(`<span style="color:var(--text-faint);font-size:13px;padding:9px 0">
+        main.push(`<span style="color:var(--text-faint);font-size:13px;padding:9px 0">
           Waiting for the host to start…</span>`);
       }
     } else if (room.status === 'playing') {
       if (canRequestTakeback(s)) {
-        parts.push(`<button class="btn btn-sm" id="tbreq">Request takeback</button>`);
+        manage.push(`<button class="btn btn-sm" id="tbreq">Request takeback</button>`);
       }
       // A team that is lost, or agreed on a draw, needs a way out that is not waiting for
       // mate. Both are open to any seated player, not just whoever is on the clock.
       if (canEndGame(s)) {
-        parts.push(`<button class="btn btn-sm" id="drawoffer"
+        manage.push(`<button class="btn btn-sm" id="drawoffer"
           ${canOfferDraw(s) ? '' : 'disabled'}>Offer draw</button>`);
-        parts.push(`<button class="btn btn-sm btn-danger" id="resign">Resign</button>`);
+        manage.push(`<button class="btn btn-sm btn-danger" id="resign">Resign</button>`);
       }
       if (isHost) {
-        parts.push(`<button class="btn btn-sm btn-ghost" id="reset">Back to lobby</button>`);
+        manage.push(`<button class="btn btn-sm btn-ghost" id="reset">Back to lobby</button>`);
       }
     } else if (room.status === 'finished' && isHost) {
-      parts.push(`<button class="btn btn-primary btn-sm" id="rematch">Rematch</button>`);
-      parts.push(`<button class="btn btn-sm btn-ghost" id="reset">Back to lobby</button>`);
+      main.push(`<button class="btn btn-primary btn-sm" id="rematch">Rematch</button>`);
+      manage.push(`<button class="btn btn-sm btn-ghost" id="reset">Back to lobby</button>`);
     }
 
-    controls.innerHTML = parts.join('');
-    controls.querySelector('#start')?.addEventListener('click', () => net.startGame());
-    controls.querySelector('#rematch')?.addEventListener('click', () => net.rematch());
-    controls.querySelector('#reset')?.addEventListener('click', () => net.resetToLobby());
-    controls.querySelector('#tbreq')?.addEventListener('click', () => {
+    controls.innerHTML = main.join('');
+    controls.hidden = main.length === 0;
+    gameActions.innerHTML = manage.join('');
+    gameActions.hidden = manage.length === 0;
+
+    // Bound across both rows, because which row a button landed in is a question about
+    // where it reads best, not about what it does.
+    const find = (sel: string): HTMLElement | null =>
+      controls.querySelector<HTMLElement>(sel) ?? gameActions.querySelector<HTMLElement>(sel);
+
+    find('#start')?.addEventListener('click', () => net.startGame());
+    find('#rematch')?.addEventListener('click', () => net.rematch());
+    find('#reset')?.addEventListener('click', () => net.resetToLobby());
+    find('#tbreq')?.addEventListener('click', () => {
       net.requestTakeback();
       toast('Takeback requested — waiting on your opponent');
     });
-    controls.querySelector('#drawoffer')?.addEventListener('click', () => {
+    find('#drawoffer')?.addEventListener('click', () => {
       net.offerDraw();
       toast('Draw offered — waiting on your opponent');
       sfx.click();
     });
     // Resigning ends the game for the whole team and cannot be undone, so it asks first.
-    controls.querySelector('#resign')?.addEventListener('click', () => {
+    find('#resign')?.addEventListener('click', () => {
       const side = s.you?.seat?.color === 'white' ? 'White' : 'Black';
       const { host, close } = modal(`
         <h2>Resign?</h2>
@@ -1035,7 +1099,19 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   root.querySelector('#exit')!.addEventListener('click', onLeave);
 
   const onKey = (e: KeyboardEvent): void => {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+    // Anywhere text is being typed, the room's single-key shortcuts are not shortcuts --
+    // they are the letters. The bug report dialog is a *textarea*, which this guard used
+    // to miss entirely: writing "the effects flicker" flipped the board, muted the sound
+    // and toggled the effects on the way past, and the arrow keys, which are prevented
+    // here, could not move the cursor through what had been typed.
+    const t = e.target;
+    if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement
+      || t instanceof HTMLTextAreaElement
+      || (t instanceof HTMLElement && t.isContentEditable)) return;
+
+    // A dialog over the room owns the keyboard while it is open, whatever has focus
+    // inside it. Escape included: it is the dialog's way out, not the review's.
+    if (document.querySelector('.modal-host')) return;
 
     // The board owns the arrows while it has focus -- they drive its own square cursor --
     // so stepping through the game is only bound outside it.

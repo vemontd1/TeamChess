@@ -278,38 +278,73 @@ export class CardHand {
 
   // ---- the opponent's side of the table ----
 
+  /**
+   * The table: everything about the cards that is not somebody's hand.
+   *
+   * Rewritten after a report that said, in full, "not informative hard to understand".
+   * It was right. The panel showed a row of card backs, two rows of unlabelled piece
+   * silhouettes under the words SPENT and YOURS, and a line reading "Deck 26 Deal 2 Cap 7
+   * Sacrifice 3" -- four numbers with no units and no verbs between them. Every one of
+   * those was legible only to someone who already knew what it meant, which is nobody the
+   * panel is for.
+   *
+   * Now every row is a sentence: who holds how many, who has spent what, and what the
+   * table's rules cost, written out. The pictures stay -- a spent knight is quicker to
+   * recognise as a knight than as the word -- but nothing is carried by a picture alone.
+   */
   private renderOpponent(cards: CardsPublic | null, myColor: Color | null): void {
     if (!cards) { this.oppEl.innerHTML = ''; return; }
+    const me = myColor ? cards[myColor] : null;
     const oppColor: Color = myColor === 'white' ? 'black' : 'white';
     const opp = cards[oppColor];
-    const me = myColor ? cards[myColor] : null;
 
-    // The backs are staggered on entry too, so an opponent drawing is visible as motion
-    // on their side of the table rather than as a number quietly changing.
-    const backs = Array.from({ length: opp.handCount },
-      (_, i) => `<span class="card-back" style="--i:${i}"></span>`).join('');
+    const name = (c: Color): string => (c === 'white' ? 'White' : 'Black');
+
+    const holds = (color: Color, side: CardSidePublic): string => {
+      const backs = Array.from({ length: side.handCount },
+        (_, i) => `<span class="card-back" style="--i:${i}"></span>`).join('');
+      return `<div class="opp-row">
+        <span class="opp-label">${name(color)} holds</span>
+        <span class="opp-backs">${backs
+          || '<span class="opp-none">an empty hand</span>'}</span>
+        <span class="opp-count">${side.handCount === 0 ? ''
+          : `${side.handCount} card${side.handCount === 1 ? '' : 's'}`}</span>
+      </div>`;
+    };
+
+    const spent = (label: string, side: CardSidePublic, color: Color): string => {
+      const n = side.played.length;
+      return `<div class="spent-row${label === 'You have spent' ? ' spent-mine' : ''}">
+        <span class="spent-label">${label}</span>
+        ${spentStrip(side.played, color)}
+        <span class="spent-count">${n === 0 ? 'nothing yet'
+          : `${n} card${n === 1 ? '' : 's'}`}</span>
+      </div>`;
+    };
+
+    // A spectator holds no hand, so they get both sides rather than one side and a blank
+    // where theirs would be.
+    const rows = me
+      ? `${holds(oppColor, opp)}
+         ${spent(`${name(oppColor)} has spent`, opp, oppColor)}
+         ${spent('You have spent', me, myColor!)}`
+      : `${holds('white', cards.white)}
+         ${holds('black', cards.black)}
+         ${spent('White has spent', cards.white, 'white')}
+         ${spent('Black has spent', cards.black, 'black')}`;
 
     this.oppEl.innerHTML = `
-      <div class="opp-row">
-        <span class="opp-label">${oppColor === 'white' ? 'White' : 'Black'} holds</span>
-        <span class="opp-backs">${backs || '<span class="opp-none">nothing</span>'}</span>
-        <span class="opp-count">${opp.handCount}</span>
-      </div>
-      <div class="spent-row">
-        <span class="spent-label">Spent</span>
-        ${spentStrip(opp.played, oppColor)}
-      </div>
-      ${me ? `<div class="spent-row spent-mine">
-        <span class="spent-label">Yours</span>
-        ${spentStrip(me.played, myColor!)}
-      </div>` : ''}
+      ${rows}
       <div class="cards-meta">
-        <span title="Cards left in your draw pile">Deck ${me ? me.deckCount : opp.deckCount}</span>
-        <span title="Cards dealt at the start of each turn">Deal ${cards.drawPerTurn}</span>
+        <span title="Cards still to be dealt from ${me ? 'your' : 'that'} draw pile">
+          <b>${me ? me.deckCount : opp.deckCount}</b> left in the deck</span>
+        <span title="Dealt at the start of every turn, up to the hand cap">
+          <b>${cards.drawPerTurn}</b> dealt a turn</span>
         ${capMeta(cards, me)}
         ${sacrificeMeta(cards, me)}
         ${cards.enraged
-          ? '<span class="meta-hot" title="Twenty plies in: both sides deal one more">Enraged</span>'
+          ? `<span class="meta-hot" title="Twenty plies in, both sides deal one more">
+              enraged: one extra card a turn</span>`
           : ''}
       </div>`;
   }
@@ -408,9 +443,14 @@ export class CardHand {
           CardHand.DEAL_MS + dealt * DEAL_STAGGER_MS);
         dealt++;
       }
+      // Position in the fan, and how wide a fan it is. Written as custom properties
+      // because the angle and the lift are the stylesheet's business, not this file's --
+      // all it knows is that this is card `i` of `n`.
       el.style.order = String(i);
+      el.style.setProperty('--i', String(i));
       this.paintCard(el, slot, hand);
     });
+    this.handEl.style.setProperty('--n', String(slots.length));
 
     if (dealt > 0 && hadHand) this.handlers.onDeal?.(dealt);
   }
@@ -573,7 +613,8 @@ function capMeta(cards: CardsPublic, me: CardSidePublic | null): string {
   return `<span class="${shrunk ? 'meta-shrunk' : ''}" title="${shrunk
     ? 'Fewer piece kinds left on the board means fewer cards worth holding. '
       + 'Nothing is taken from you: the deal stops until your hand is back under the cap.'
-    : 'A hand never grows past this; the deal simply stops'}">Cap ${cap}</span>`;
+    : 'A hand never grows past this; the deal simply stops'}"><b>${cap}</b> cards in hand`
+    + `${shrunk ? ' (shrinking with your army)' : ' at most'}</span>`;
 }
 
 /**
@@ -586,10 +627,10 @@ function capMeta(cards: CardsPublic, me: CardSidePublic | null): string {
 function sacrificeMeta(cards: CardsPublic, me: CardSidePublic | null): string {
   if (me && me.sacrificeReadyIn > 0) {
     return `<span title="Plies until you may sacrifice again">`
-      + `Sacrifice in ${me.sacrificeReadyIn}</span>`;
+      + `sacrifice ready in <b>${me.sacrificeReadyIn}</b></span>`;
   }
-  return `<span title="Burn ${cards.sacrificeCost} cards to move any piece">`
-    + `Sacrifice ${cards.sacrificeCost}</span>`;
+  return `<span title="Burn ${cards.sacrificeCost} cards to move any piece you like">`
+    + `sacrifice costs <b>${cards.sacrificeCost}</b> cards</span>`;
 }
 
 /** "knights", "knights and rooks", "knights, rooks and queens". */

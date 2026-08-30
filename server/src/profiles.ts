@@ -43,28 +43,42 @@ interface StoredProfile {
   record: { wins: number; losses: number; draws: number };
   /** Newest first. */
   games: ProfileGame[];
-  /** Games finished per day, `YYYY-MM-DD` -> count. Feeds the activity grid. */
+  /**
+   * When each game finished, oldest first. Feeds the activity grid.
+   *
+   * Timestamps, not day counts. Which day a game belongs to depends on the clock of the
+   * person reading the grid, and this server has no idea what that is: counting days here
+   * put a game finished at 01:24 UTC -- half nine the previous evening in New York -- on
+   * a square its player had not played on, while the square they had played on stayed
+   * dark. So the day is decided in the browser and this file keeps the raw moment.
+   */
+  playedAt?: number[];
+  /** The older per-day counts, kept only to be read once and converted. */
   days?: Record<string, number>;
 }
 
-/** Days kept in the activity map: a little over a year, which is what the grid shows. */
+/** A little over a year of play, which is what the grid shows. */
 const MAX_DAYS = 400;
+const MAX_PLAYED = 4000;
 
-/** Local-date key. The grid is read by a person in their own timezone, not in UTC. */
+/** Server-local date key. Only used to read the old `days` maps back. */
 function dayKey(at: number): string {
   const d = new Date(at);
   const pad = (n: number): string => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** Drop days that have fallen off the far end of the grid, so the file cannot grow forever. */
-function pruneDays(days: Record<string, number>): Record<string, number> {
-  const keys = Object.keys(days).sort();
-  if (keys.length <= MAX_DAYS) return days;
-  const keep = new Set(keys.slice(-MAX_DAYS));
-  const out: Record<string, number> = {};
-  for (const k of keys) if (keep.has(k)) out[k] = days[k];
-  return out;
+/**
+ * Drop anything older than the grid can show, so the file cannot grow forever.
+ *
+ * Generous on both axes -- a year of days, and a cap on the count well past what any one
+ * player will reach in it -- because the cost of keeping a timestamp is eight bytes and
+ * the cost of dropping one is a hole in somebody's year.
+ */
+function prunePlayed(list: number[]): number[] {
+  const floor = Date.now() - (MAX_DAYS + 2) * 86_400_000;
+  const kept = list.filter(t => t >= floor).sort((a, b) => a - b);
+  return kept.length > MAX_PLAYED ? kept.slice(-MAX_PLAYED) : kept;
 }
 
 const cache = new Map<string, StoredProfile>();
@@ -96,7 +110,7 @@ export function initProfiles(): void {
       // parsed rather than trusted, for the same reason the archive is: one bad file
       // should cost one profile, not the whole store
       if (p?.id && Array.isArray(p.games) && p.record) {
-        cache.set(p.id, backfillDays(p));
+        cache.set(p.id, backfillPlayed(p));
       }
     } catch {
       console.warn(`[profiles] skipping unreadable ${name}`);
@@ -106,23 +120,36 @@ export function initProfiles(): void {
 }
 
 /**
- * Give an older profile the per-day counts it was saved without.
+ * Give an older profile the timestamps it was saved without.
  *
- * The activity grid is fed by `days`, which is counted as games are recorded. Profiles
- * written before that field existed have none, so their grid came up empty despite a list
- * of games sitting right underneath it. The games carry `finishedAt`, so the counts can
- * be rebuilt from them -- capped at whatever the list still holds, which is the best that
- * can be known and a great deal better than nothing.
+ * Two vintages to catch up. A profile written before any activity was recorded has only
+ * its games, which carry `finishedAt` -- the best that can be known, and a great deal
+ * better than an empty grid under a list of games. A profile written with the per-day
+ * counts has a day key and no time of day: those become noon on that day, which lands on
+ * the same date in every timezone the grid will be read in, and the count is spread
+ * across as many timestamps as the day held.
+ *
+ * The old `days` field is dropped on the way through. It cannot be made correct -- the
+ * moment it was written it lost the only thing that could have placed it.
  */
-function backfillDays(p: StoredProfile): StoredProfile {
-  if (p.days && Object.keys(p.days).length > 0) return p;
-  const days: Record<string, number> = {};
+function backfillPlayed(p: StoredProfile): StoredProfile {
+  if (p.playedAt && p.playedAt.length > 0) { delete p.days; return p; }
+
+  const out: number[] = [];
   for (const g of p.games) {
-    if (typeof g?.finishedAt !== 'number') continue;
-    const k = dayKey(g.finishedAt);
-    days[k] = (days[k] ?? 0) + 1;
+    if (typeof g?.finishedAt === 'number') out.push(g.finishedAt);
   }
-  p.days = days;
+
+  if (p.days && out.length === 0) {
+    for (const [key, n] of Object.entries(p.days)) {
+      const at = new Date(`${key}T12:00:00Z`).getTime();
+      if (!Number.isFinite(at)) continue;
+      for (let i = 0; i < n; i++) out.push(at);
+    }
+  }
+
+  delete p.days;
+  p.playedAt = prunePlayed(out);
   return p;
 }
 
@@ -157,7 +184,7 @@ export function touchProfile(id: string, name: string): Profile {
   if (!p) {
     p = {
       id, name, createdAt: now, lastSeenAt: now,
-      record: { wins: 0, losses: 0, draws: 0 }, games: [], days: {},
+      record: { wins: 0, losses: 0, draws: 0 }, games: [], playedAt: [],
     };
     cache.set(id, p);
   }
@@ -219,13 +246,10 @@ export function recordGame(
   p.games.unshift(entry);
   if (p.games.length > MAX_GAMES) p.games.length = MAX_GAMES;
 
-  // Counted here rather than derived from `games` on read: the list is capped, and a year
-  // of play would otherwise show a grid that quietly emptied from the left as old games
-  // fell off it.
-  const days = p.days ?? {};
-  const key = dayKey(summary.finishedAt);
-  days[key] = (days[key] ?? 0) + 1;
-  p.days = pruneDays(days);
+  // Kept here rather than derived from `games` on read: the list is capped, and a year of
+  // play would otherwise show a grid that quietly emptied from the left as old games fell
+  // off it.
+  p.playedAt = prunePlayed([...(p.playedAt ?? []), summary.finishedAt]);
 
   p.lastSeenAt = Date.now();
   save(p);
@@ -246,6 +270,6 @@ export function profileView(id: string, limit = 25): ProfileView | null {
   return {
     profile: publicOf(p),
     games: p.games.slice(0, Math.min(Math.max(1, limit), MAX_GAMES)),
-    activity: { ...(p.days ?? {}) },
+    playedAt: [...(p.playedAt ?? [])],
   };
 }

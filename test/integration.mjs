@@ -1128,24 +1128,21 @@ async function main() {
     check('and the record is filed under the account name',
       prof.profile.name === 'Arch-W', prof.profile.name);
 
-    // The activity grid is drawn from this, and it is counted as games are recorded
-    // rather than derived from the (capped) games list.
-    const today = (() => {
-      const d = new Date();
-      const pad = n => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    })();
-    check('the profile carries per-day activity for the grid',
-      prof.activity && typeof prof.activity === 'object'
-      && prof.activity[today] >= 1,
-      JSON.stringify(prof.activity));
-    check('and the day counts at least as many games as the list shows for today',
-      prof.activity[today] >= prof.games.filter(g => {
-        const d = new Date(g.finishedAt);
-        const pad = n => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` === today;
-      }).length,
-      `${prof.activity[today]} counted`);
+    // The activity grid is drawn from these, and they are kept as games are recorded
+    // rather than derived from the (capped) games list. Moments, not day keys: which day
+    // a game belongs to is a question about the reader's clock, and only the browser
+    // knows that one.
+    check('the profile carries the moments the grid is drawn from',
+      Array.isArray(prof.playedAt) && prof.playedAt.length >= 1,
+      JSON.stringify(prof.playedAt));
+    check('every one of them is a timestamp, not a day',
+      prof.playedAt.every(t => Number.isFinite(t) && t > 1e12),
+      JSON.stringify(prof.playedAt.slice(0, 3)));
+    check('there is one for every game the list shows',
+      prof.playedAt.length >= prof.games.length,
+      `${prof.playedAt.length} vs ${prof.games.length}`);
+    check('and they are in order, oldest first',
+      prof.playedAt.every((t, i) => i === 0 || prof.playedAt[i - 1] <= t));
     check('and it can be read by that public id',
       (await fetchJson(`/api/profile/${prof.profile.id}`))?.profile?.id === prof.profile.id);
 
