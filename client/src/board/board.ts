@@ -372,6 +372,28 @@ export class Board {
     }
   }
 
+  /**
+   * How much of what is legal this hand can actually pay for.
+   *
+   * The same shape as the server's own choice set -- castles included only when the hand
+   * can pay the Rook card they cost -- so the line the room prints agrees with the number
+   * the archive records for that ply. Two counts of the same thing that disagree would be
+   * worse than not showing one.
+   */
+  countAffordable(): { legal: number; affordable: number } {
+    const moves = this.chess.moves({ verbose: true }) as unknown as
+      Array<{ piece: string; flags: string }>;
+    if (this.allowedTypes == null) return { legal: moves.length, affordable: moves.length };
+    const allowed = this.allowedTypes;
+    const castles = (m: { flags: string }): boolean =>
+      m.flags.includes('k') || m.flags.includes('q');
+    return {
+      legal: moves.length,
+      affordable: moves.filter(m => allowed.has(m.piece) && (this.castleOk || !castles(m)))
+        .length,
+    };
+  }
+
   /** Whether the piece on a square is one this player may move at this moment. */
   private canMove(square: string): boolean {
     const piece = this.pieces.get(square);

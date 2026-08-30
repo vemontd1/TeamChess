@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Color, GameSummary, Profile, ProfileGame, ProfileView } from './types.js';
+import type {
+  Color, GameSummary, Profile, ProfileGame, ProfileView, SideMetrics,
+} from './types.js';
 
 /**
  * Player profiles: a name, a tally, and the games behind it.
@@ -179,9 +181,14 @@ function publicOf(p: StoredProfile): Profile {
   };
 }
 
-/** Record a finished game against one player's profile, from their side of the board. */
+/**
+ * Record a finished game against one player's profile, from their side of the board.
+ *
+ * `metrics` is that side's roll-up, and is optional for the reason everything about
+ * metrics is optional: a game that was not measured is still a game that was played.
+ */
 export function recordGame(
-  id: string, name: string, summary: GameSummary, color: Color,
+  id: string, name: string, summary: GameSummary, color: Color, metrics?: SideMetrics,
 ): void {
   if (!ready) initProfiles();
   let p = cache.get(id);
@@ -207,6 +214,7 @@ export function recordGame(
     yourColor: color,
     yourResult,
     opponents: color === 'white' ? summary.black : summary.white,
+    you: metrics,
   };
   p.games.unshift(entry);
   if (p.games.length > MAX_GAMES) p.games.length = MAX_GAMES;

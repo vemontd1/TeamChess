@@ -1,10 +1,14 @@
 import { renderAppBar, bindAppBar } from './appbar';
-import { escapeHtml } from './timerRing';
+import { escapeHtml, timeAgo } from '../util/format';
 import { toast } from './widgets';
 import { openGameViewer } from './gameViewer';
 import { sfx } from '../audio/sfx';
 import * as net from '../net/socket';
-import type { Account, AdminOverview, BugReport, GameSummary } from '../types';
+import { wireCharts } from './charts';
+import { metricsTab } from './adminMetrics';
+import type {
+  Account, AdminOverview, BugReport, GameMode, GameSummary, Insights,
+} from '../types';
 
 /**
  * The admin panel: what the app has actually gathered.
@@ -17,20 +21,16 @@ import type { Account, AdminOverview, BugReport, GameSummary } from '../types';
  * `ADMIN_USERS`. This page never asks whether it should be allowed to draw itself; it asks
  * for data and draws what comes back, so hiding the route would gain nothing and revealing
  * it costs nothing.
+ *
+ * The Metrics tab is the one part that does not read the archive directly: distributions
+ * over every game ever played are folded into a rolling aggregate as games finish, because
+ * the per-ply record is the large part of a game file and a panel that reads all of them
+ * would get slower the more there was to say. The aggregate is a cache -- the Rebuild
+ * button at the foot of the tab is the way back to the games themselves.
  */
 
 function pct(n: number, total: number): string {
   return total > 0 ? `${Math.round((n / total) * 100)}%` : '0%';
-}
-
-function when(at: number): string {
-  const mins = Math.round((Date.now() - at) / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return new Date(at).toLocaleDateString(undefined,
-    { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 function tallyRows(title: string, counts: Record<string, number>, total: number): string {
@@ -54,7 +54,7 @@ function gameRow(g: GameSummary): string {
     <span class="adm-game-mode">${g.mode === 'cards' ? 'Cards' : 'Team'}</span>
     <span class="adm-game-plies">${g.plies} ply</span>
     <span class="adm-game-res">${escapeHtml(g.result)} · ${escapeHtml(g.reason)}</span>
-    <span class="adm-game-when">${escapeHtml(when(g.finishedAt))}</span>
+    <span class="adm-game-when">${escapeHtml(timeAgo(g.finishedAt))}</span>
   </button>`;
 }
 
@@ -73,7 +73,7 @@ function reportRow(r: BugReport): string {
   return `<article class="adm-report${r.resolved ? ' done' : ''}" data-id="${escapeHtml(r.id)}">
     <header>
       <span class="adm-rep-who">${escapeHtml(r.reporter)}</span>
-      <span class="adm-rep-when">${escapeHtml(when(r.at))}</span>
+      <span class="adm-rep-when">${escapeHtml(timeAgo(r.at))}</span>
       ${shots.length > 0
         ? `<span class="adm-rep-count">${shots.length} image${shots.length > 1 ? 's' : ''}</span>`
         : ''}
@@ -137,13 +137,23 @@ function openLightbox(src: string): void {
   document.body.appendChild(host);
 }
 
+type Tab = 'reports' | 'metrics' | 'stats';
+
 export function renderAdmin(root: HTMLElement, account: Account): () => void {
   let live = true;
   let overview: AdminOverview | null = null;
   let reports: BugReport[] = [];
-  let tab: 'stats' | 'reports' = 'reports';
+  let insights: Insights | null = null;
+  let tab: Tab = 'reports';
+  // Which mode the distributions are for. Follows whichever has been played most until
+  // it is chosen by hand.
+  let mode: GameMode | null = null;
+  // The tooltip layer belongs to the drawn charts, so it is torn down before each redraw.
+  let unwire: (() => void) | null = null;
 
   const draw = (loading: boolean): void => {
+    unwire?.();
+    unwire = null;
     const g = overview?.games;
     const total = g?.total ?? 0;
     const open = reports.filter(r => !r.resolved).length;
@@ -169,6 +179,8 @@ export function renderAdmin(root: HTMLElement, account: Account): () => void {
         <div class="adm-tabs">
           <button class="adm-tab${tab === 'reports' ? ' on' : ''}" data-tab="reports">
             Reports${open > 0 ? ` (${open})` : ''}</button>
+          <button class="adm-tab${tab === 'metrics' ? ' on' : ''}" data-tab="metrics">
+            Metrics</button>
           <button class="adm-tab${tab === 'stats' ? ' on' : ''}" data-tab="stats">
             Stats &amp; setups</button>
         </div>
@@ -183,6 +195,9 @@ export function renderAdmin(root: HTMLElement, account: Account): () => void {
             ? '<div class="games-empty"><p>No reports yet.</p></div>'
             : `<div class="adm-reports">${reports.map(reportRow).join('')}</div>`}
         </section>` : ''}
+
+        ${!loading && tab === 'metrics' && insights
+          ? metricsTab(insights, mode ?? insights.modes[0]?.mode ?? 'cards') : ''}
 
         ${!loading && tab === 'stats' && overview ? `
         <section class="panel edge">
@@ -219,11 +234,34 @@ export function renderAdmin(root: HTMLElement, account: Account): () => void {
 
     root.querySelectorAll<HTMLButtonElement>('.adm-tab').forEach(b => {
       b.addEventListener('click', () => {
-        tab = b.dataset.tab as 'stats' | 'reports';
+        tab = b.dataset.tab as Tab;
         sfx.click();
         draw(false);
       });
     });
+
+    root.querySelectorAll<HTMLButtonElement>('.adm-mode').forEach(b => {
+      b.addEventListener('click', () => {
+        mode = b.dataset.mode as GameMode;
+        sfx.click();
+        draw(false);
+      });
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-act="rebuild"]')
+      ?.addEventListener('click', async ev => {
+        const btn = ev.currentTarget as HTMLButtonElement;
+        btn.disabled = true;
+        btn.textContent = 'Rebuilding…';
+        const fresh = await net.adminRebuildInsights();
+        if (!live) return;
+        if (!fresh) { toast('Could not rebuild the aggregate', 'danger'); btn.disabled = false; return; }
+        insights = fresh;
+        toast(`Recounted ${fresh.gamesCovered} measured game(s)`, 'info');
+        draw(false);
+      });
+
+    if (tab === 'metrics') unwire = wireCharts(root);
 
     root.querySelectorAll<HTMLButtonElement>('.adm-game').forEach(b => {
       b.addEventListener('click', async () => {
@@ -258,10 +296,10 @@ export function renderAdmin(root: HTMLElement, account: Account): () => void {
 
   draw(true);
 
-  void Promise.all([net.adminOverview(), net.adminReports(200)])
-    .then(([ov, reps]) => {
+  void Promise.all([net.adminOverview(), net.adminReports(200), net.adminInsights()])
+    .then(([ov, reps, ins]) => {
       if (!live) return;
-      if (!ov && !reps) {
+      if (!ov && !reps && !ins) {
         // The server decides; if it says no, say so plainly rather than drawing an
         // empty panel that looks broken.
         root.innerHTML = `${renderAppBar(account)}
@@ -277,9 +315,10 @@ export function renderAdmin(root: HTMLElement, account: Account): () => void {
       }
       overview = ov;
       reports = reps ?? [];
+      insights = ins;
       draw(false);
     })
     .catch(() => { if (live) draw(false); });
 
-  return () => { live = false; };
+  return () => { live = false; unwire?.(); };
 }

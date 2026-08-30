@@ -1,7 +1,10 @@
 import { Board } from '../board/board';
 import { renderMoves, modal } from './widgets';
-import { escapeHtml } from './timerRing';
+import { escapeHtml } from '../util/format';
+import { wireCharts } from './charts';
+import { reportHtml } from './gameReport';
 import { pgnUrl } from '../net/socket';
+import { noteEvent } from '../net/telemetry';
 import { START_FEN } from '../state/store';
 import type { ArchivedGame, Color, HistoryEntry } from '../types';
 
@@ -16,6 +19,11 @@ import type { ArchivedGame, Color, HistoryEntry } from '../types';
  * The live room has its own review built into the move list, because there the board is
  * already on screen and only needs a lens over it. This is the other case -- a game from
  * a profile, with no room and no board -- so it brings its own of both.
+ *
+ * It also holds the **report**: the same game read as measurements rather than as moves.
+ * The two live in one window because they are two views of one thing, and a player who
+ * wants to know why a game went the way it did will want both within a click of each
+ * other.
  */
 
 interface Frame {
@@ -48,9 +56,18 @@ function resultLine(game: ArchivedGame): string {
   return `${head} — ${game.reason}`;
 }
 
+export interface ViewerOptions {
+  /** Which view opens first. The report is the interesting one straight after a game. */
+  view?: 'replay' | 'report';
+  /** Whose report it is. Null for a spectator, which reads it from White's side. */
+  you?: Color | null;
+}
+
 /** Open the replay. Returns a closer, in case the caller has to tear it down itself. */
-export function openGameViewer(game: ArchivedGame): () => void {
+export function openGameViewer(game: ArchivedGame, opts: ViewerOptions = {}): () => void {
   const frames = framesOf(game);
+  let view: 'replay' | 'report' = opts.view ?? 'replay';
+  let unwireCharts: (() => void) | null = null;
   let at = frames.length - 1;
   // Ply 1 is White's, so a viewer with no seat of their own is best served looking from
   // whichever side is not obviously the spectator's -- White, as the board's default.
@@ -67,9 +84,15 @@ export function openGameViewer(game: ArchivedGame): () => void {
             ${game.config.mode === 'cards' ? 'Chess Cards' : 'Team Chess'} ·
             ${new Date(game.finishedAt).toLocaleDateString()}</div>
         </div>
+        <div class="viewer-views">
+          <button class="viewer-view" data-view="replay">Replay</button>
+          <button class="viewer-view" data-view="report">Report</button>
+        </div>
         <button class="btn btn-sm btn-icon btn-ghost" id="vwflip" title="Flip board">⇅</button>
         <button class="btn btn-sm btn-ghost" id="vwclose">Close</button>
       </div>
+
+      <div class="viewer-report" id="vwreport" hidden></div>
 
       <div class="viewer-body">
         <div class="viewer-board" id="vwboard"></div>
@@ -116,6 +139,38 @@ export function openGameViewer(game: ArchivedGame): () => void {
 
   const atEl = host.querySelector<HTMLElement>('#vwat')!;
   const movesEl = host.querySelector<HTMLElement>('#vwmoves')!;
+  const reportEl = host.querySelector<HTMLElement>('#vwreport')!;
+  const bodyEl = host.querySelector<HTMLElement>('.viewer-body')!;
+  const flipBtn = host.querySelector<HTMLElement>('#vwflip')!;
+
+  /**
+   * The report is rendered once, on first sight of it.
+   *
+   * Not up front: most openings of this window are somebody stepping through a game, and
+   * a report that nobody looks at is a material graph drawn for nothing.
+   */
+  const showView = (): void => {
+    const report = view === 'report';
+    if (report && !reportEl.dataset.drawn) {
+      reportEl.innerHTML = reportHtml(game, opts.you ?? null);
+      reportEl.dataset.drawn = '1';
+      unwireCharts?.();
+      unwireCharts = wireCharts(reportEl);
+    }
+    reportEl.hidden = !report;
+    bodyEl.hidden = report;
+    flipBtn.hidden = report;
+    host.querySelectorAll<HTMLElement>('.viewer-view').forEach(b => {
+      b.classList.toggle('on', b.dataset.view === view);
+    });
+  };
+
+  host.querySelectorAll<HTMLButtonElement>('.viewer-view').forEach(b => {
+    b.addEventListener('click', () => {
+      view = b.dataset.view as 'replay' | 'report';
+      showView();
+    });
+  });
 
   const paint = (): void => {
     at = Math.max(0, Math.min(frames.length - 1, at));
@@ -148,6 +203,7 @@ export function openGameViewer(game: ArchivedGame): () => void {
   const shut = (): void => {
     window.removeEventListener('resize', sizeBoard);
     window.removeEventListener('keydown', onKey);
+    unwireCharts?.();
     board.destroy();
     close();
   };
@@ -165,6 +221,10 @@ export function openGameViewer(game: ArchivedGame): () => void {
   host.addEventListener('click', e => { if (e.target === host) shut(); });
 
   paint();
+  showView();
+  // Stepping back through a finished game is one of the few things only the client can
+  // see, and it is the question "does anyone review?" answered rather than guessed.
+  noteEvent('review');
   return shut;
 }
 

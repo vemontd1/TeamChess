@@ -2,9 +2,10 @@ import { io, type Socket } from 'socket.io-client';
 import type {
   RoomState, JoinResult, RoomConfig, Color, MovePayload, MoveFx, ChatMessage, MarkView,
   GameEnded, HandState, ProfileView, ArchivedGame, GameSummary, Account, AuthResult,
-  AdminOverview, BugReport,
+  AdminOverview, BugReport, Insights,
 } from '../types';
 import { setState } from '../state/store';
+import { attachTelemetry } from './telemetry';
 
 const TOKEN_KEY = 'bl.token';
 const NAME_KEY = 'bl.name';
@@ -50,6 +51,10 @@ let socket: Socket | null = null;
 export function connect(): Socket {
   if (socket) return socket;
   socket = io({ transports: ['websocket', 'polling'] });
+
+  // Telemetry gets the socket handed to it rather than importing it, so that the one
+  // module in the app allowed to fail silently cannot reach into the one that must not.
+  attachTelemetry((event, payload) => { socket?.volatile.emit(event, payload); });
 
   socket.on('connect', () => setState({ connected: true }));
   socket.on('disconnect', () => setState({ connected: false }));
@@ -215,6 +220,26 @@ export function adminAttachment(reportId: string, attachmentId: string):
 export function adminOverview(): Promise<AdminOverview | null> {
   return new Promise(resolve => {
     sock().emit('admin:overview', {}, (res: AdminOverview | null) => resolve(res ?? null));
+  });
+}
+
+/** The archive rolled up: distributions, mode health, the funnel and the guardrails. */
+export function adminInsights(): Promise<Insights | null> {
+  return new Promise(resolve => {
+    sock().emit('admin:insights', {}, (res: Insights | null) => resolve(res ?? null));
+  });
+}
+
+/**
+ * Recompute the aggregate from the archive.
+ *
+ * Slow by design -- it reads every game -- so it is a button rather than something the
+ * page does on its own. It is what makes the counters safe to change: there is always a
+ * way to have the old games counted the new way.
+ */
+export function adminRebuildInsights(): Promise<Insights | null> {
+  return new Promise(resolve => {
+    sock().emit('admin:insights-rebuild', {}, (res: Insights | null) => resolve(res ?? null));
   });
 }
 

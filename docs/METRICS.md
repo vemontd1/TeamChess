@@ -1,8 +1,10 @@
 # Metrics — what to measure, and why
 
-**Steps 1 and 2 are built** — per-ply recording, the archive block, and the shared module
-that `test/balance.mjs` now computes through. Steps 3 to 6 are still a plan. Section 9 says
-which is which.
+**All six steps are built.** Per-ply recording and the archive block; the shared module
+that `test/balance.mjs` computes through; the insights aggregate behind the admin panel's
+Metrics tab; the player's own game report and the trends on their profile; the client
+telemetry channel; and a guardrail check that fails when the simulation drifts outside the
+targets in section 8. Section 9 is the order it happened in and what changed on the way.
 
 ## What it has to be for
 
@@ -152,6 +154,8 @@ already collected), and the same split by device class.
 
 ## 3. What only the client can see
 
+**Built:** `client/src/net/telemetry.ts` sending, `telemetry:*` on the server receiving.
+
 The server sees positions and clocks. It cannot see hesitation, and hesitation is the
 clearest signal that an interface is confusing.
 
@@ -170,6 +174,24 @@ These arrive over a small, rate-limited, **best-effort** socket channel — a dr
 telemetry packet must never affect a game. They are advisory: a client can lie, so nothing
 that decides a rule may depend on them.
 
+As built: three events, and no more than three. `telemetry:client` describes the browser
+once per room; `telemetry:turn` reports one turn, after it has been played;
+`telemetry:event` carries the two things that belong to a session rather than a move — the
+review being opened and the phone drawer being pulled out. Everything is emitted
+`volatile`, so a packet that cannot be delivered immediately is dropped rather than
+queued, and every number is clamped on arrival rather than trusted.
+
+The turn packet is sent **when the state carrying the move arrives, not when the server
+acknowledges it**. The acknowledgement comes back first, and at that moment the client's
+own store still describes the position the move was made *from* — so reporting there names
+the wrong ply, and the server drops it. That was a real bug, caught by an integration test
+written against the real socket rather than against a mock of one.
+
+Three fields from the plan are not collected. `cardSelections` is, but as a count of picks
+rather than of pick-and-unpick pairs; `premoveQueued` is not, because a queued move that is
+never played leaves no turn to attach it to, and `fxLevel` rides along with the device
+report rather than being its own field.
+
 ---
 
 ## 4. Storage
@@ -185,6 +207,14 @@ that decides a rule may depend on them.
   affordable the fix is short keys or a columnar layout, not less measurement.
 - A rolling aggregate (`data/insights.json`) updated on each archive, so the admin panel
   never scans the archive. Rebuildable from the archive, so it is a cache and not a source.
+  Built: `server/src/insights.ts`. Counters only — no sample is kept, so every
+  distribution is a **fixed-bucket histogram** and every percentile is interpolated inside
+  the bucket it lands in. Changing a bucket bound is a schema bump, because old counts
+  would otherwise be silently re-labelled; a schema change rebuilds from the archive on
+  the next start, which is what makes a counter safe to add.
+- The **funnel is the exception**: it counts rooms, and a room that was created and never
+  started leaves nothing on disk. Those counters are live, and a rebuild deliberately
+  keeps them rather than recomputing a number the archive cannot know.
 
 ## 5. One definition, two consumers
 
@@ -198,6 +228,10 @@ side, …)` makes the harness a *predictor* of production rather than a second o
 
 ## 6. What players get
 
+**Built.** The report is `client/src/ui/gameReport.ts`, reached from the end-of-game card
+and from any game in the review window; the trends are on the profile; the constraint line
+is under the hand, on your turn, in cards mode only.
+
 - **Game report** on the review screen: your think time against theirs, how constrained
   your hand actually was, cards drawn against cards spent by kind, the moves where material
   was left hanging, the material graph.
@@ -208,6 +242,8 @@ side, …)` makes the harness a *predictor* of production rather than a second o
   dims unreachable pieces, which is the same information shown better.
 
 ## 7. What the admin gets
+
+**Built**, as the Metrics tab of `#/admin`.
 
 Distributions, not averages — a mean think time of 12s hides both the instant movers and
 the timeouts. Percentiles (p50/p90) for think time, wait time and game length.
@@ -233,17 +269,32 @@ Metrics are worth more with a declared target. Starting points, to be argued wit
 A CI check that fails when the harness moves outside these ranges turns balance from a
 thing we remember to check into a thing that tells us.
 
+**Built.** The table above lives in one place -- `TARGETS` in `server/src/insights.ts` --
+and has two consumers: the admin panel grades real play against it, and
+`npm run guardrails` grades the simulation against it. Two lists would have been two
+different definitions of the same target, which is the failure this whole document is
+about.
+
+The harness can only be held to what a random mover produces, so it checks the open rate
+and the emergency rate; the rest -- sacrifices, timeouts, waits, abandonment, rematches --
+need players, and are graded on the panel. Every guardrail there reports `unknown` rather
+than a verdict until there is enough play behind it: a target argued from nine games is
+worse than no target.
+
 ## 9. Order of work
 
 1. ~~**`PlyMetric` plus server-side recording plus the archive block.**~~ **Done.**
 2. ~~**The shared metric module**, with `balance.mjs` switched over to it.~~ **Done.**
-3. **Insights aggregate and the admin dashboard** — distributions and mode health.
-4. **The post-game report** for players.
-5. **The client telemetry channel** — indecision, device, premoves.
-6. **Guardrails in CI.**
+3. ~~**Insights aggregate and the admin dashboard** — distributions and mode health.~~
+   **Done.**
+4. ~~**The post-game report** for players.~~ **Done.**
+5. ~~**The client telemetry channel** — indecision, device, premoves.~~ **Done.**
+6. ~~**Guardrails in CI.**~~ **Done.**
 
 Steps 1 and 2 carried most of the value: the mode is now measurable in real play and the
-simulation is computed by the same code as production. Steps 3 to 6 are consumers.
+simulation is computed by the same code as production. Step 3 made it readable, step 6 made
+it self-reporting, step 4 gave the measurements back to the person they are about, and step
+5 added the half of a turn the server cannot see.
 
 ### What changed on the way
 
@@ -251,6 +302,57 @@ simulation is computed by the same code as production. Steps 3 to 6 are consumer
 it costs, which no earlier version did — neither the server's reach nor the harness's. The
 shipped `open` rate moved from 18.8% to 20.6% when the harness switched over, and the
 second number is the correct one.
+
+### What changed building the dashboard
+
+**Distributions had to become histograms.** A rolling aggregate cannot keep samples, so
+p50 and p90 are read off fixed buckets and interpolated. That is exact to the bucket width
+and no further, which is why the buckets are narrow where the answers matter -- the first
+ten seconds of a think, the first minute of a wait -- and open-ended at the top.
+
+**Each target got its own sample floor.** Deriving it from the unit was wrong in the case
+that mattered: an abandonment rate is a share of *games*, and holding it to two hundred
+plies would have left it blank for months while the number it needed sat right there.
+
+**The room funnel was added**, which section 2 asked for and nothing else could answer. It
+is the only thing here that is not derived from the archive, and the only thing a rebuild
+cannot restore.
+
+**A preview harness** (`npm run preview:metrics`) renders the tab from simulated play to a
+file. A dashboard cannot be designed against an empty database, and waiting for a hundred
+real games before finding out that an axis label does not fit is the slowest possible way
+to find out.
+
+**The metrics tab renders as a pure string** (`client/src/ui/adminMetrics.ts`), with no DOM
+behind it -- which is what lets the preview draw the real markup from Node instead of a
+second copy of it that drifts.
+
+### What changed building the report and the channel
+
+**The report compares rather than grades.** Your numbers against your opponent's, on the
+same axis, with the better of each pair marked by weight and a dot rather than by colour
+alone. There is no score and no advice about what should have been played: the numbers are
+measurements, and a measurement dressed up as a verdict is how a player learns to distrust
+all of them.
+
+**Every caveat is printed next to its number.** `hung` looks one ply ahead and does not
+search the recapture, so a piece deliberately traded appears in "left hanging". Burying
+that in this document and printing the bare count would have been the easier build and the
+worse product.
+
+**The profile stores its own copy of each side's roll-up.** A trend cannot be rebuilt from
+a list of results, and the archive is capped -- so the roll-up travels onto the profile
+with the game rather than being looked up later from a file that may be gone.
+
+**The constraint line stops at one number.** "4 of 11 legal moves your hand can pay for",
+on your turn, in cards mode. It is counted by the board with the same rule the server
+records the ply with, so the line and the archive cannot disagree -- and nothing else is
+shown mid-game, because a hang rate on screen turns the game into a second game played
+against the HUD.
+
+**The telemetry channel reports a turn late on purpose.** See section 3: the client waits
+for the state that carries its own move before describing the turn, because the
+acknowledgement arrives first and names the wrong ply.
 
 `hung` and `missed` are computed from material rather than from the bot's scorer as first
 planned. The scorer carries a random tiebreak, which would have put noise in a stored

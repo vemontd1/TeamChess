@@ -9,5 +9,8 @@ dist/
 # source SFX pack (only client/public/sfx/ is loaded by the app)
 Assets/
 
-# archived games and player profiles, written at runtime
+# archived games, profiles and the insights aggregate, written at runtime
 data/
+
+# rendered by `npm run preview:metrics`, for looking at charts before there is play
+preview/

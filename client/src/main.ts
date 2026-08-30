@@ -7,6 +7,7 @@ import './styles/chat.css';
 import './styles/cards.css';
 import './styles/turn.css';
 import './styles/account.css';
+import './styles/charts.css';
 
 import { renderHome } from './ui/home';
 import { renderRoom } from './ui/room';

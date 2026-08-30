@@ -4,13 +4,14 @@ import { escapeHtml } from './timerRing';
 import { toast } from './widgets';
 import { openGameViewer } from './gameViewer';
 import { renderActivityGrid, summarise } from './activityGrid';
+import { columnChart, figure, fmtMs, fmtPct, wireCharts, type Series } from './charts';
 import { sfx } from '../audio/sfx';
 import * as net from '../net/socket';
 import { getState, setState } from '../state/store';
 import type { Account, ProfileGame, ProfileView } from '../types';
 
 /**
- * The profile: who you are, when you play, and every game you have played.
+ * The profile: who you are, when you play, how you have been playing, and every game.
  *
  * Three blocks, in the order the questions get asked. Who — an identity card with the
  * record and how it splits. When — a year of squares, which is the only thing here that
@@ -102,7 +103,62 @@ function emptyList(): string {
   </div>`;
 }
 
+/**
+ * How you have been playing, game by game.
+ *
+ * The only place a *trend* can be drawn: a result list says who won, and says nothing
+ * about whether your think time is creeping up or your pieces are being left where they
+ * can be taken less often than they were. Each game carries its own side roll-up, so this
+ * is read off the profile rather than reassembled from an archive that is capped anyway.
+ *
+ * Oldest on the left, because that is the direction time runs in. Only games that were
+ * measured appear; a season that starts before metrics did simply starts later.
+ */
+function trends(games: ProfileGame[]): string {
+  const measured = games.filter(g => g.you && g.you.moves > 0).slice(0, 30).reverse();
+  if (measured.length < 3) return '';
+
+  const cats = measured.map(g => new Date(g.finishedAt).toLocaleDateString(undefined,
+    { day: 'numeric', month: 'short' }));
+  const think: Series[] = [{
+    name: 'Typical think time', color: '--viz-1',
+    values: measured.map(g => g.you!.thinkMsMean),
+  }];
+  const care: Series[] = [{
+    name: 'Pieces left hanging, per move', color: '--viz-2',
+    values: measured.map(g => (g.you!.moves > 0 ? g.you!.hangs / g.you!.moves : 0)),
+  }];
+  const every = Math.max(1, Math.ceil(measured.length / 8));
+
+  return `<section class="panel edge">
+    <div class="panel-head"><span class="panel-title">How you have been playing</span>
+      <span class="games-count">last ${measured.length} measured games</span></div>
+    <div class="adm-figs">
+      ${figure({
+        title: 'Think time',
+        note: 'Your mean over each game. Longer is not worse -- but a game you played at '
+          + 'four times your usual pace is worth remembering when you read the result.',
+        chart: columnChart({
+          cats, series: think, format: n => fmtMs(n), catLabel: 'game',
+          label: 'Mean think time per game, oldest first', labelEvery: every, height: 180,
+        }),
+      })}
+      ${figure({
+        title: 'Pieces left hanging',
+        note: 'Per move, as a share. One ply deep and no recapture searched, so a trade '
+          + 'counts here too -- watch the trend rather than any single game.',
+        chart: columnChart({
+          cats, series: care, format: n => fmtPct(n, 0), catLabel: 'game',
+          label: 'Share of moves that left a piece hanging, per game, oldest first',
+          labelEvery: every, height: 180,
+        }),
+      })}
+    </div>
+  </section>`;
+}
+
 export function renderProfile(root: HTMLElement, account: Account): () => void {
+  let unwire: (() => void) | null = null;
   const draw = (view: ProfileView | null, loading: boolean): void => {
     const name = view?.profile.name ?? account.username;
     const rec = view?.profile.record ?? { wins: 0, losses: 0, draws: 0 };
@@ -172,6 +228,8 @@ export function renderProfile(root: HTMLElement, account: Account): () => void {
           </div>`}
         </section>
 
+        ${loading ? '' : trends(games)}
+
         ${played === 0 ? '' : `
         <section class="panel edge act-panel">
           <div class="panel-head">
@@ -196,6 +254,8 @@ export function renderProfile(root: HTMLElement, account: Account): () => void {
       </div>`;
 
     bindAppBar(root);
+    unwire?.();
+    unwire = wireCharts(root);
 
     root.querySelector('#pf-out')!.addEventListener('click', () => {
       net.logoutAccount();
@@ -229,5 +289,5 @@ export function renderProfile(root: HTMLElement, account: Account): () => void {
     draw(view, false);
   }).catch(() => { if (live) draw(getState().profile, false); });
 
-  return () => { live = false; };
+  return () => { live = false; unwire?.(); };
 }

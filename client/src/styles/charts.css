@@ -1,0 +1,453 @@
+/* ============================================================
+   Charts — the admin panel's metrics tab
+   ============================================================ */
+
+/*
+ * Series colours.
+ *
+ * Not the interface accent. `--accent` (#E8B04B) is too light to sit in the band a dark
+ * surface wants for a data mark, and it is already the colour of every button and every
+ * active state on the page -- a bar wearing it reads as something you can press. These
+ * three are stepped for this panel's own surface (#16161A) and checked as a set for
+ * colour-blind separation, all pairs, along with a 3:1 contrast floor against the panel.
+ * Changing one of them means checking all three again, not just the one.
+ *
+ * Slot order is fixed and never cycled: series one is always amber, two always blue,
+ * three always green. Colour follows the thing, not its rank in a sorted list.
+ */
+/* Scoped to the figure as well as the plot: the legend sits outside the `.viz` wrapper,
+   and a swatch reading an undefined custom property is an invisible swatch. */
+.viz,
+.viz-fig,
+.adm-guardrails {
+  --viz-1: #c98500;
+  --viz-2: #3987e5;
+  --viz-3: #199e70;
+  --viz-grid: rgba(232, 176, 75, 0.10);
+  --viz-axis: rgba(232, 176, 75, 0.28);
+}
+
+/* Status is its own palette, deliberately not one of the series colours, and never the
+   only thing carrying the meaning -- every badge has a mark and a word beside it. */
+.adm-guardrails {
+  --viz-good: var(--success);
+  --viz-watch: #ec835a;
+  --viz-off: var(--danger);
+  --viz-idle: var(--text-faint);
+}
+
+/* ---------- figures ---------- */
+
+.adm-figs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  gap: calc(18px * var(--ui));
+  padding: calc(16px * var(--ui));
+}
+
+.viz-fig {
+  margin: 0;
+  padding: calc(14px * var(--ui));
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.18);
+  min-width: 0;
+}
+
+.viz-fig figcaption { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+
+.viz-title {
+  font-family: var(--font-display);
+  font-size: calc(16px * var(--ui));
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+.viz-note { font-size: calc(11.5px * var(--ui)); color: var(--text-faint); line-height: 1.45; }
+
+.viz-empty {
+  margin: 0;
+  padding: calc(18px * var(--ui)) 0;
+  color: var(--text-faint);
+  font-size: calc(12px * var(--ui));
+}
+
+/* The numbers worth reading without pointing at anything. Proportional figures: these
+   are standalone values, not a column that has to line up. */
+.viz-stats { display: flex; flex-wrap: wrap; gap: calc(18px * var(--ui)); margin-bottom: 10px; }
+.viz-stats div { display: flex; flex-direction: column; }
+.viz-stats b {
+  font-size: calc(19px * var(--ui));
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.15;
+}
+.viz-stats span {
+  font-size: calc(10.5px * var(--ui));
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Identity without colour-matching: the dot carries the hue, the name wears ink. */
+.viz-legend { display: flex; flex-wrap: wrap; gap: calc(14px * var(--ui)); margin-bottom: 8px; }
+.viz-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(11.5px * var(--ui));
+  color: var(--text-dim);
+}
+.viz-legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+/* ---------- the plot ---------- */
+
+.viz svg { display: block; width: 100%; height: auto; overflow: visible; }
+.viz-grid { stroke: var(--viz-grid); stroke-width: 1; }
+.viz-axis { stroke: var(--viz-axis); stroke-width: 1; }
+
+/* Sizes are in viewBox units, which is near enough to px at the widths a figure is drawn
+   at. Tabular figures here, because axis ticks and value columns have to line up. */
+.viz text { font-family: var(--font-ui); }
+.viz-tick, .viz-cat {
+  font-size: 10.5px;
+  fill: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.viz-value { font-size: 11px; fill: var(--text-dim); font-variant-numeric: tabular-nums; }
+/* A line is 2px with round joins; its area is the same hue at a tenth, so the fill reads
+   as a wash under the line rather than as a second mark. */
+.viz-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.viz-area { opacity: 0.10; stroke: none; }
+.viz-dot { stroke: var(--panel); stroke-width: 2; }
+.viz-zero { stroke: var(--viz-axis); }
+.viz-hit { fill: transparent; }
+.viz-hit:hover { fill: rgba(232, 176, 75, 0.06); }
+
+.viz-tip {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--panel-edge-strong);
+  background: var(--bg-lift);
+  color: var(--text);
+  font-size: calc(11.5px * var(--ui));
+  box-shadow: var(--shadow-lift);
+  white-space: nowrap;
+}
+
+/* ---------- the table under every chart ---------- */
+
+.viz-table-wrap { margin-top: 8px; }
+.viz-table-wrap summary {
+  cursor: pointer;
+  font-size: calc(11px * var(--ui));
+  color: var(--text-faint);
+  list-style: none;
+}
+.viz-table-wrap summary::-webkit-details-marker { display: none; }
+.viz-table-wrap summary::before { content: '▸ '; }
+.viz-table-wrap[open] summary::before { content: '▾ '; }
+.viz-table-wrap summary:hover { color: var(--accent); }
+
+.viz-table-scroll { overflow-x: auto; margin-top: 6px; }
+.viz-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: calc(11.5px * var(--ui));
+  font-variant-numeric: tabular-nums;
+}
+.viz-table th, .viz-table td {
+  padding: 4px 10px 4px 0;
+  text-align: right;
+  border-bottom: 1px solid rgba(232, 176, 75, 0.08);
+  white-space: nowrap;
+}
+.viz-table thead th { color: var(--text-faint); font-weight: 500; }
+.viz-table tbody th { text-align: left; color: var(--text-dim); font-weight: 400; }
+.viz-table td { color: var(--text); }
+
+/* ---------- guardrails ---------- */
+
+.adm-guardrails {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
+  gap: calc(14px * var(--ui));
+  padding: calc(16px * var(--ui));
+}
+
+.grd {
+  padding: calc(13px * var(--ui));
+  border: 1px solid var(--panel-edge);
+  border-left: 2px solid var(--viz-idle);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.18);
+  --grd-tone: var(--viz-idle);
+}
+.grd-good { --grd-tone: var(--viz-good); border-left-color: var(--viz-good); }
+.grd-watch { --grd-tone: var(--viz-watch); border-left-color: var(--viz-watch); }
+.grd-off { --grd-tone: var(--viz-off); border-left-color: var(--viz-off); }
+
+.grd header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.grd-label { font-size: calc(13px * var(--ui)); font-weight: 600; color: var(--text); }
+.grd-scope {
+  font-size: calc(10px * var(--ui));
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.grd-status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: calc(11px * var(--ui));
+  color: var(--grd-tone);
+  white-space: nowrap;
+}
+.grd-status i { font-style: normal; }
+
+.grd-body { display: flex; align-items: center; gap: calc(12px * var(--ui)); }
+.grd-value {
+  font-size: calc(22px * var(--ui));
+  font-weight: 600;
+  color: var(--text);
+  min-width: 3.4em;
+}
+
+/* The band is the target; the mark is where we are. Both on one track, because the only
+   question this widget answers is whether one is inside the other. */
+.grd-meter {
+  position: relative;
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+.grd-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(232, 176, 75, 0.16);
+  border-left: 1px solid rgba(232, 176, 75, 0.4);
+  border-right: 1px solid rgba(232, 176, 75, 0.4);
+}
+.grd-fill {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  border-radius: 2px;
+  background: var(--grd-tone);
+  opacity: 0.85;
+}
+.grd-mark {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text);
+}
+.grd-target { font-size: calc(11px * var(--ui)); color: var(--text-faint); white-space: nowrap; }
+
+.grd-why {
+  margin: 8px 0 0;
+  font-size: calc(11.5px * var(--ui));
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+.grd-n { display: block; margin-top: 3px; opacity: 0.75; }
+
+/* ---------- mode picker, tiles, footer ---------- */
+
+.adm-modes { display: flex; gap: 6px; margin-left: auto; }
+.adm-mode {
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-edge);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: calc(11.5px * var(--ui));
+  cursor: pointer;
+}
+.adm-mode:hover { color: var(--text); border-color: var(--panel-edge-strong); }
+.adm-mode.on { background: var(--accent-wash); border-color: var(--accent-dim); color: var(--accent); }
+.adm-mode i { font-style: normal; opacity: 0.6; margin-left: 5px; }
+
+.adm-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(calc(140px * var(--ui)), 1fr));
+  gap: calc(14px * var(--ui));
+  padding: calc(16px * var(--ui));
+  border-bottom: 1px solid var(--panel-edge);
+}
+.adm-tile { display: flex; flex-direction: column; gap: 2px; }
+.adm-tile b {
+  font-size: calc(22px * var(--ui));
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.1;
+}
+.adm-tile span {
+  font-size: calc(10.5px * var(--ui));
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.adm-foot {
+  display: flex;
+  align-items: center;
+  gap: calc(14px * var(--ui));
+  flex-wrap: wrap;
+  padding: calc(14px * var(--ui));
+  font-size: calc(11.5px * var(--ui));
+  color: var(--text-faint);
+}
+.adm-foot .btn { margin-left: auto; }
+
+@media (max-width: 720px) {
+  .adm-figs, .adm-guardrails { padding: calc(12px * var(--ui)); }
+  .grd-body { flex-wrap: wrap; }
+  .grd-meter { order: 3; flex-basis: 100%; }
+  .viz-tip { display: none; }
+}
+
+
+/* ---------- the player's own report ---------- */
+
+.report { --viz-1: #c98500; --viz-2: #3987e5; --viz-3: #199e70; }
+
+.rep-head { margin-bottom: calc(14px * var(--ui)); }
+.rep-result {
+  font-family: var(--font-display);
+  font-size: calc(24px * var(--ui));
+  color: var(--text);
+}
+.rep-reason { font-size: calc(13px * var(--ui)); color: var(--text-faint); margin-left: 8px; }
+.rep-sub { font-size: calc(12px * var(--ui)); color: var(--text-dim); margin-top: 2px; }
+
+.rep-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(calc(120px * var(--ui)), 1fr));
+  gap: calc(14px * var(--ui));
+  padding: calc(14px * var(--ui)) 0;
+  border-top: 1px solid var(--panel-edge);
+  border-bottom: 1px solid var(--panel-edge);
+}
+.rep-tiles div { display: flex; flex-direction: column; gap: 2px; }
+.rep-tiles b { font-size: calc(21px * var(--ui)); font-weight: 600; color: var(--text); }
+.rep-tiles span {
+  font-size: calc(10.5px * var(--ui));
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.rep-client {
+  margin: calc(12px * var(--ui)) 0 0;
+  font-size: calc(12.5px * var(--ui));
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+.rep-client b { color: var(--text); }
+
+.rep-figs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+  gap: calc(16px * var(--ui));
+  margin-top: calc(14px * var(--ui));
+}
+
+.rep-section { margin-top: calc(20px * var(--ui)); }
+.rep-section h3 {
+  font-size: calc(15px * var(--ui));
+  color: var(--text);
+  margin-bottom: calc(10px * var(--ui));
+}
+
+/* Two columns of numbers that have to line up, so tabular figures here. */
+.rep-table { width: 100%; border-collapse: collapse; font-size: calc(12.5px * var(--ui)); }
+.rep-table thead th {
+  text-align: right;
+  padding: 4px 0 8px;
+  color: var(--text-faint);
+  font-weight: 500;
+  font-size: calc(11px * var(--ui));
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.rep-table thead th:first-child { text-align: left; }
+.rep-table tbody th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--text-dim);
+  padding: 7px 12px 7px 0;
+  border-top: 1px solid rgba(232, 176, 75, 0.08);
+}
+.rep-table tbody td {
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  padding: 7px 0;
+  border-top: 1px solid rgba(232, 176, 75, 0.08);
+  width: 22%;
+}
+/* The better of a pair is marked with weight and a dot, never with colour alone. */
+.rep-better { color: var(--success); font-weight: 600; }
+.rep-better::after { content: " •"; }
+.rep-note {
+  display: block;
+  font-size: calc(11px * var(--ui));
+  color: var(--text-faint);
+  margin-top: 2px;
+  max-width: 46ch;
+}
+
+.rep-hangs { margin: 0; padding-left: calc(20px * var(--ui)); }
+.rep-hangs li { color: var(--text-dim); font-size: calc(12.5px * var(--ui)); padding: 3px 0; }
+.rep-hangs b { color: var(--text); font-variant-numeric: tabular-nums; }
+.rep-hangs span { margin-left: 8px; color: var(--text-faint); }
+.rep-caveat, .rep-empty {
+  margin: calc(10px * var(--ui)) 0 0;
+  font-size: calc(11.5px * var(--ui));
+  color: var(--text-faint);
+  line-height: 1.55;
+}
+
+/* The report shares the viewer window with the replay, and is the taller of the two. */
+.viewer-report { max-height: 72vh; overflow-y: auto; padding-right: 6px; }
+.viewer-views { display: flex; gap: 4px; margin-left: auto; margin-right: 8px; }
+.viewer-view {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-edge);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: calc(12px * var(--ui));
+  cursor: pointer;
+}
+.viewer-view:hover { color: var(--text); border-color: var(--panel-edge-strong); }
+.viewer-view.on {
+  background: var(--accent-wash);
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ---------- the one number shown mid-game ---------- */
+
+.constraint {
+  width: 100%;
+  text-align: center;
+  font-size: calc(11.5px * var(--ui));
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+  padding: 2px 0 4px;
+}
+.constraint-tight { color: var(--accent); }

@@ -1,5 +1,6 @@
 import { sfx } from '../audio/sfx';
 import { FireRing } from './fireRing';
+import { escapeHtml } from '../util/format';
 
 const BOX = 152;
 const R = 64;
@@ -172,8 +173,7 @@ function format(ms: number): string {
   return String(total);
 }
 
-export function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, c => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!
-  ));
-}
+/* Re-exported rather than defined here: half the app imports it from this module, and
+   the definition has moved somewhere with no DOM behind it, so the metrics tab can be
+   rendered outside a browser. */
+export { escapeHtml };

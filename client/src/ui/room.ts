@@ -15,6 +15,8 @@ import {
 } from './cardHand';
 import { effectsEnabled, toggleMotion, systemPrefersReduced, getMotionPref, motionLevel } from '../state/motion';
 import * as net from '../net/socket';
+import * as tel from '../net/telemetry';
+import { openGameViewer } from './gameViewer';
 import {
   getState, setState, subscribe, orientation, isMyTurn, mustAnswerTakeback,
   canRequestTakeback, canOfferDraw, canEndGame, mustAnswerDraw, isSeated, isCardsMode,
@@ -65,6 +67,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
             <div class="tray" id="tray"></div></section>
           <div id="board"></div>
           <div id="cards"></div>
+          <div class="constraint" id="constraint" hidden></div>
           <div class="btn-row" id="controls"></div>
         </div>
       </div>
@@ -224,13 +227,18 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
       // cheapest card that covers the piece, which is what the player would have chosen.
       const sacrificeIds = cardHand.sacrificeSelection() ?? undefined;
       const cardId = sacrificeIds ? undefined : (cardHand.selection() ?? undefined);
+      armTurnReport();
       const ok = await net.sendMove({ from, to, promotion, cardId, sacrificeIds });
-      if (ok) cardHand.clearSelection();
-      else if (sacrificeIds) toast('That sacrifice was refused', 'danger');
+      if (ok) {
+        cardHand.clearSelection();
+      } else {
+        pendingPly = null;
+        if (sacrificeIds) toast('That sacrifice was refused', 'danger');
+      }
       return ok;
     },
     onIllegal: () => sfx.illegal(),
-    onPickup: () => sfx.pickup(),
+    onPickup: () => { sfx.pickup(); tel.pickedUp(); },
     requestPromotion: promotionDialog,
     onPremove: move => {
       premove = move;
@@ -283,16 +291,74 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
     const s = getState();
     const cardId = isCardsMode(s) ? (cardHand.selection() ?? undefined) : undefined;
+    armTurnReport();
     const ok = await net.sendMove({ from: queued.from, to: queued.to, cardId });
     firingPremove = false;
 
     if (ok) {
       cardHand.clearSelection();
+      tel.premovePlayed();
       return;
     }
+    pendingPly = null;
+    tel.premoveRejected();
     sfx.illegal();
     toast('Your queued move is no longer playable');
     announce('The queued move could not be played. It is still your turn.');
+  };
+
+  /**
+   * The ply this player's move will become, held until the state that carries it arrives.
+   *
+   * A move's acknowledgement comes back before the broadcast that contains it, so reading
+   * the ply number off the store at that moment names the position the move was made
+   * *from* -- and the server, quite correctly, drops a report about a ply this seat did
+   * not play. The count is therefore taken before the move and confirmed after: my move
+   * is the ply after the position I moved from, and it is reported once the store agrees
+   * that it exists.
+   */
+  let pendingPly: number | null = null;
+
+  const armTurnReport = (): void => {
+    const room = getState().room;
+    pendingPly = room ? room.history.length + 1 : null;
+  };
+
+  const flushTurnReport = (s: AppState): void => {
+    if (pendingPly == null || !s.room) return;
+    const entry = s.room.history[pendingPly - 1];
+    if (!entry) return;
+    const ply = pendingPly;
+    pendingPly = null;
+    // Somebody else's move landed where mine was expected -- a takeback, a bot, the clock.
+    // The turn it described is gone, so the report goes with it.
+    if (entry.color !== s.you?.seat?.color) return;
+    tel.turnPlayed(s.room.gameSeq, ply);
+  };
+
+  /**
+   * "4 of 11 legal moves affordable", under the hand, on your turn only.
+   *
+   * The one measurement a player is shown while they are still playing, and it stops
+   * there deliberately. A hand that says how constrained it is answers the question the
+   * mode actually poses -- "I can see the move, can I play it?" -- while a hang rate or a
+   * think time on screen would turn the game into a second game played against the HUD.
+   *
+   * Counted by the board, from the same rule the server records the ply with, so the line
+   * and the archive cannot disagree.
+   */
+  const constraintEl = root.querySelector<HTMLElement>('#constraint')!;
+  const paintConstraint = (s: AppState): void => {
+    if (!isCardsMode(s) || !isMyTurn(s) || !shownPosition(s).live) {
+      constraintEl.hidden = true;
+      return;
+    }
+    const { legal, affordable } = board.countAffordable();
+    constraintEl.hidden = legal === 0;
+    constraintEl.classList.toggle('constraint-tight', legal > 0 && affordable <= 2);
+    constraintEl.textContent = affordable === legal
+      ? `Your hand covers all ${legal} legal moves`
+      : `${affordable} of ${legal} legal moves your hand can pay for`;
   };
 
   const timer = new TimerRing();
@@ -321,7 +387,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   };
 
   const cardHand = new CardHand({
-    onSelect: () => { applyReach(); sfx.click(); },
+    onSelect: () => { applyReach(); sfx.click(); tel.cardPicked(); },
     onHover: id => { hoverCardId = id; applyReach(); },
     onSacrificeChange: () => { applyReach(); sfx.click(); },
     onMulligan: () => { unlockAudio(); net.mulligan(); },
@@ -393,6 +459,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
   root.querySelector('#menu')!.addEventListener('click', () => {
     setDrawer(!drawerOpen);
+    if (drawerOpen) tel.noteEvent('drawer');
     sfx.click();
   });
   root.querySelector('#drawer-close')!.addEventListener('click', () => setDrawer(false));
@@ -447,6 +514,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
 
   net.onGameStart(() => {
     myTurnAnnounced = false;
+    tel.resetTelemetry();
     // a new game is not the old one's archive, and it is not being reviewed either
     setState({ archived: null, reviewPly: null });
     if (getState().soundOn) sfx.start();
@@ -621,9 +689,14 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
     // The turn is open and something was waiting for it.
     if (isMyTurn(s) && shown.live && premove && !firingPremove) void firePremove();
 
+    flushTurnReport(s);
+    paintConstraint(s);
+
     if (isMyTurn(s)) {
       if (!myTurnAnnounced) {
         myTurnAnnounced = true;
+        // The turn has opened: hesitation is counted from here, not from the move.
+        tel.turnOpened();
         if (!firstRender) {
           showTurnAlert(s.you?.name ?? null, boardHost);
           announce('Your move.');
@@ -701,6 +774,7 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   }
 
   const step = (to: number | null): void => {
+    if (to != null && !isReviewing(getState())) tel.noteEvent('review');
     setReviewPly(to);
     sfx.click();
   };
@@ -890,12 +964,24 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
         PGN</a>.</p>` : ''}
       <div class="btn-row" style="justify-content:center;margin-top:20px">
         ${isHost ? '<button class="btn btn-primary" id="goagain">Rematch</button>' : ''}
+        ${gameId ? '<button class="btn" id="goreport">Your report</button>' : ''}
         <button class="btn" id="goreview">Review the game</button>
         <button class="btn btn-ghost" id="goclose">Close</button>
       </div>`);
     renderStats(host.querySelector<HTMLElement>('#gostats')!, room);
     host.querySelector('#goclose')!.addEventListener('click', close);
     host.querySelector('#goreview')!.addEventListener('click', () => { close(); step(0); });
+    // The report needs the whole archived game -- the room only ever saw the summary --
+    // so it is fetched on the way in rather than held against the chance it is wanted.
+    host.querySelector('#goreport')?.addEventListener('click', async ev => {
+      const btn = ev.currentTarget as HTMLButtonElement;
+      btn.disabled = true;
+      const full = await net.fetchGame(gameId!);
+      btn.disabled = false;
+      if (!full) { toast('That game is not stored yet', 'danger'); return; }
+      close();
+      openGameViewer(full, { view: 'report', you: getState().you?.seat?.color ?? null });
+    });
     host.querySelector('#goagain')?.addEventListener('click', () => { close(); net.rematch(); });
   }
 
@@ -994,8 +1080,16 @@ export function renderRoom(root: HTMLElement, roomId: string, onLeave: () => voi
   const s0 = getState();
   if (s0.room) render(s0);
 
+  // What this game is being played on. Sent once on entering the room, and again if the
+  // window crosses into a different class of device -- turning a phone sideways is a
+  // different layout, and the whole point of collecting it is to know whether that one
+  // gets used.
+  tel.describeClient();
+  const stopDescribing = tel.redescribeOnResize();
+
   return () => {
     unsub();
+    stopDescribing();
     clearBloodBurst();
     timer.destroy();
     cardHand.destroy();

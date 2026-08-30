@@ -8,7 +8,8 @@ import {
   type CardsState, type Spend,
 } from './cards.js';
 import {
-  computeChoiceSet, materialBalance, hangingAfter, cardsSnapshot,
+  computeChoiceSet, materialBalance, hangingAfter, cardsSnapshot, emptyClientSession,
+  type ClientSession,
 } from './metrics.js';
 import type {
   Color, GameMode, RoomConfig, RoomState, SeatView, TeamView, GameOver, SeatKind,
@@ -89,6 +90,15 @@ export interface Room {
    * there is nothing left to protect.
    */
   plyMetrics: PlyMetric[];
+  /**
+   * What the players' browsers have reported this game, per side.
+   *
+   * Advisory and best-effort: a client can lie, can send nothing at all, and a bot sends
+   * nothing by definition. Nothing in the game reads it -- it exists so that hesitation,
+   * device and premove outcomes, none of which the server can see, reach the archive
+   * alongside the measurements that it can.
+   */
+  clientSessions: { white: ClientSession; black: ClientSession };
   frames: PlyFrame[];
   gameOver: GameOver | null;
   /**
@@ -104,6 +114,17 @@ export interface Room {
   startFen: string;
   /** Set once this game has been written to the archive, so it is never written twice. */
   archived: boolean;
+  /**
+   * Which funnel steps this room has already reached.
+   *
+   * The funnel counts rooms, not games, and each step at most once -- a room that starts
+   * five games is one room that started, not five. Kept here because the room is the only
+   * thing that knows, and it is deliberately not reset by a rematch.
+   */
+  funnel: {
+    seated: boolean; started: boolean; firstMove: boolean; finished: boolean;
+    rematch: boolean;
+  };
   cards: CardsState | null;         // cards mode only
   chat: ChatMessage[];              // every channel; filtered when delivered
   chatSeq: number;
@@ -193,11 +214,15 @@ export function createRoom(config: RoomConfig): Room {
     lastMoveAuto: false,
     history: [],
     plyMetrics: [],
+    clientSessions: { white: emptyClientSession(), black: emptyClientSession() },
     frames: [],
     gameOver: null,
     gameSeq: 0,
     startFen: new Chess().fen(),
     archived: false,
+    funnel: {
+      seated: false, started: false, firstMove: false, finished: false, rematch: false,
+    },
     cards: null,
     chat: [],
     chatSeq: 0,
@@ -952,6 +977,7 @@ export function resetGame(room: Room, status: 'lobby' | 'playing'): void {
   room.lastMoveAuto = false;
   room.history = [];
   room.plyMetrics = [];
+  room.clientSessions = { white: emptyClientSession(), black: emptyClientSession() };
   room.frames = [];
   room.marks.clear();
   room.bankedMs = null;

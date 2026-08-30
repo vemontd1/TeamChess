@@ -1406,6 +1406,9 @@ async function main() {
     check('a signed-in non-admin cannot either',
       (await emitCb(plain, 'admin:overview', {})) === null
       && (await emitCb(plain, 'admin:reports', {})) === null);
+    check('and neither can read the metrics',
+      (await emitCb(reporter, 'admin:insights', {})) === null
+      && (await emitCb(plain, 'admin:insights', {})) === null);
 
     // Admin comes from the server's own environment, by design -- an admin flag stored on
     // an account would be one file edit away from a privilege escalation. That means this
@@ -1457,6 +1460,38 @@ async function main() {
     check('a non-admin cannot',
       (await emitCb(plain, 'admin:report-resolve',
         { id: mine.id, resolved: false })) === null);
+
+    // The metrics tab. Earlier sections have played whole games through this server, so
+    // the aggregate should already have measured play in it -- and the funnel should have
+    // counted the rooms those games were played in.
+    const ins = await emitCb(admin, 'admin:insights', {});
+    check('an admin gets the insights', ins != null && Array.isArray(ins.modes));
+    check('which have folded in the games this run played',
+      ins.gamesCovered >= 1 && ins.modes.some(m => m.plies > 0),
+      JSON.stringify({ covered: ins.gamesCovered,
+                       plies: ins.modes.map(m => `${m.mode}:${m.plies}`) }));
+    check('every distribution has a bucket per bound, plus the open one',
+      ins.modes.every(m => [m.think, m.wait, m.length, m.duration].every(
+        d => d.counts.length === d.bounds.length + 1)));
+    check('the funnel counted rooms, and each step at most once per room',
+      ins.funnel.created >= 1 && ins.funnel.created >= ins.funnel.seated
+      && ins.funnel.seated >= ins.funnel.started
+      && ins.funnel.started >= ins.funnel.rematch,
+      JSON.stringify(ins.funnel));
+    check('and every declared target is reported against',
+      ins.guardrails.length >= 5 && ins.guardrails.every(g =>
+        typeof g.target === 'string'
+        && ['good', 'watch', 'off', 'info', 'unknown'].includes(g.status)),
+      JSON.stringify(ins.guardrails.map(g => `${g.key}:${g.status}`)));
+
+    const rebuilt = await emitCb(admin, 'admin:insights-rebuild', {});
+    check('a rebuild from the archive agrees with the rolling count',
+      rebuilt != null && rebuilt.gamesCovered === ins.gamesCovered,
+      JSON.stringify({ rolled: ins.gamesCovered, rebuilt: rebuilt?.gamesCovered }));
+    check('and keeps the funnel, which no archive can recover',
+      rebuilt.funnel.created === ins.funnel.created);
+    check('a non-admin cannot rebuild it',
+      (await emitCb(plain, 'admin:insights-rebuild', {})) === null);
     }
   }
 
@@ -1646,6 +1681,110 @@ async function main() {
       JSON.stringify({ cap: tg.metrics.firstCapturePly, lead: tg.metrics.maxLead }));
   }
 
+
+
+  {
+    log('\n=== 34. What only the client can see ===');
+    const c1 = await mkClient('Tel-W');
+    const ridC = await emitCb(c1, 'room:create',
+      { name: 'C', config: { teamSize: 1, moveTimerSec: 120 } });
+    const c2 = await mkClient('Tel-B');
+    for (const c of [c1, c2]) await join(c, ridC);
+    await emitCb(c1, 'seat:take', { color: 'white' });
+    await emitCb(c2, 'seat:take', { color: 'black' });
+
+    // A spectator: seated players are the only ones with a turn to report on.
+    const spec = await mkClient('Tel-Spec');
+    await join(spec, ridC);
+
+    c1.emit('telemetry:client',
+      { device: 'phone', pointer: 'touch', viewport: '390x844', fx: 'calm' });
+    c2.emit('telemetry:client',
+      { device: 'desktop', pointer: 'mouse', viewport: '1920x1080', fx: 'full' });
+    // Nonsense in every field: the server should keep the shape and drop the values.
+    spec.emit('telemetry:client',
+      { device: 'mainframe', pointer: 'telepathy', viewport: 'x'.repeat(200), fx: 'lol' });
+
+    c1.emit('game:start');
+    await waitFor(c1, st => st.status === 'playing');
+    const seq = c1.last.gameSeq;
+
+    const moves = [[c1, 'e2', 'e4'], [c2, 'e7', 'e5'], [c1, 'g1', 'f3'], [c2, 'b8', 'c6']];
+    for (let i = 0; i < moves.length; i++) {
+      const [cli, from, to] = moves[i];
+      await sleep(60);
+      await emitCb(cli, 'game:move', { from, to });
+      // A move's acknowledgement comes back before the broadcast that carries it, so the
+      // ply is only known once the state agrees it exists -- which is exactly what the
+      // client itself has to wait for before reporting a turn.
+      await waitFor(cli, st => st.history.length >= i + 1);
+      cli.emit('telemetry:turn', {
+        gameSeq: seq, ply: i + 1,
+        pickups: 2, cardSelections: 0, timeToFirstTouchMs: 800, premove: 'none',
+      });
+      await sleep(70);
+    }
+
+    // Everything that should be refused, aimed at plies that exist.
+    c1.emit('telemetry:turn', { gameSeq: seq, ply: 2, pickups: 99 });   // Black's ply
+    c1.emit('telemetry:turn', { gameSeq: seq, ply: 1, pickups: 7 });    // already reported
+    c1.emit('telemetry:turn', { gameSeq: seq + 5, ply: 3, pickups: 7 }); // another game
+    c1.emit('telemetry:turn', { gameSeq: seq, ply: 999, pickups: 7 });  // no such ply
+    spec.emit('telemetry:turn', { gameSeq: seq, ply: 3, pickups: 7 });  // not seated
+    c1.emit('telemetry:turn',
+      { gameSeq: seq, ply: 3, pickups: -5, cardSelections: 1e9, timeToFirstTouchMs: -1 });
+    c1.emit('telemetry:event', { kind: 'review' });
+    c2.emit('telemetry:event', { kind: 'drawer' });
+    c2.emit('telemetry:event', { kind: 'not-a-kind' });
+    await sleep(200);
+
+    c1.emit('game:resign');
+    await waitFor(c1, st => st.status === 'finished');
+    await sleep(400);
+
+    const cg = await fetchJson(`/api/games/${c1.archived.id}`);
+    const cm = cg?.metrics;
+    check('the archive carries a client block', cm?.client != null,
+      JSON.stringify(Object.keys(cm ?? {})));
+    check('reported turns are attached to the plies that were reported',
+      cm.plies.filter(p => p.client).length === moves.length,
+      JSON.stringify(cm.plies.map(p => (p.client ? p.client.pickups : null))));
+    check('and the numbers arrive as they were sent',
+      cm.plies[0].client.pickups === 2 && cm.plies[0].client.timeToFirstTouchMs === 800,
+      JSON.stringify(cm.plies[0].client));
+    check('a second report for the same ply does not overwrite the first',
+      cm.plies[0].client.pickups === 2);
+    check('a report about the other side is dropped',
+      cm.plies[1].client.pickups === 2, JSON.stringify(cm.plies[1].client));
+    check('rubbish numbers are clamped rather than stored',
+      cm.plies[2].client.pickups === 2 && cm.plies[2].client.cardSelections === 0,
+      JSON.stringify(cm.plies[2].client));
+
+    check('the side roll-up counts what the browsers said',
+      cm.client.white.plies === 2 && cm.client.white.pickups === 4,
+      JSON.stringify(cm.client.white));
+    check('the device is recorded against the turns it played',
+      cm.client.white.devices.phone === 2 && cm.client.black.devices.desktop === 2,
+      JSON.stringify({ w: cm.client.white.devices, b: cm.client.black.devices }));
+    check('and so is how it was pointed at and what effects were on',
+      cm.client.white.pointers.touch === 2 && cm.client.white.fx.calm === 2,
+      JSON.stringify(cm.client.white));
+    check('session events are counted per side',
+      cm.client.white.reviewOpened === 1 && cm.client.black.drawerOpened === 1
+      && cm.client.black.reviewOpened === 0,
+      JSON.stringify({ w: cm.client.white, b: cm.client.black }));
+    check('a spectator reports nothing at all',
+      cm.plies.every(p => !p.client || p.client.pickups === 2));
+
+    // The channel is best-effort and unacknowledged, so a flood must cost packets and
+    // nothing else: the game goes on and the archive stays sane.
+    for (let i = 0; i < 200; i++) {
+      c1.emit('telemetry:event', { kind: 'review' });
+    }
+    await sleep(150);
+    check('a flood does not take the room down',
+      (await emitCb(c1, 'admin:overview', {})) === null && c1.connected !== false);
+  }
 
   {
     log('\n=== 33. Screenshots on a report, and their deletion ===');

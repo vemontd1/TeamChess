@@ -4,7 +4,9 @@ import {
   handReach, movableTypes, canCastle, handComposition, deadHeldCount, extinctHeldCount,
   extinctTypes, handCapFor, aliveTypeCount, sacrificeReadyIn, type CardSide,
 } from './cards.js';
-import type { Color, PlyMetric, PlyCards, SideMetrics, GameMetrics } from './types.js';
+import type {
+  ClientSideMetrics, Color, PlyMetric, PlyCards, SideMetrics, GameMetrics,
+} from './types.js';
 
 /**
  * How a game is measured.
@@ -21,7 +23,14 @@ import type { Color, PlyMetric, PlyCards, SideMetrics, GameMetrics } from './typ
  * Nothing in here runs a search.
  */
 
-export const METRICS_SCHEMA = 1;
+/**
+ * 1: per-ply rows and the side roll-ups.
+ * 2: the client block -- what the browser saw, where a browser reported it.
+ *
+ * Old games carry the older number and none of the newer fields. Readers treat every
+ * one of them as optional forever rather than backfilling fiction.
+ */
+export const METRICS_SCHEMA = 2;
 
 interface VerboseMove {
   from: string; to: string; piece: string; flags: string;
@@ -221,15 +230,67 @@ function sideMetrics(plies: PlyMetric[], color: Color): SideMetrics {
 }
 
 /**
+ * Counters a side accumulates outside any one ply: opening the review, opening the phone
+ * drawer, and which browsers played the turns.
+ */
+export interface ClientSession {
+  reviewOpened: number;
+  drawerOpened: number;
+  devices: Record<string, number>;
+  pointers: Record<string, number>;
+  fx: Record<string, number>;
+}
+
+export function emptyClientSession(): ClientSession {
+  return { reviewOpened: 0, drawerOpened: 0, devices: {}, pointers: {}, fx: {} };
+}
+
+/**
+ * The browser half of a side's game.
+ *
+ * Every field is a count of what was *reported*, never of what happened: a player on a
+ * client that never sent anything simply has none of this, which is why `plies` is here
+ * to say how much of the game it covers. Reading a rate against `moves` instead would
+ * quietly divide by turns nobody measured.
+ */
+function clientMetrics(plies: PlyMetric[], color: Color,
+                       session: ClientSession): ClientSideMetrics {
+  const mine = plies.filter(p => p.color === color && p.client);
+  const touches = mine
+    .map(p => p.client!.timeToFirstTouchMs)
+    .filter((n): n is number => n != null && n >= 0);
+
+  return {
+    plies: mine.length,
+    pickups: mine.reduce((a, p) => a + p.client!.pickups, 0),
+    cardSelections: mine.reduce((a, p) => a + p.client!.cardSelections, 0),
+    firstTouchMs: percentile(touches, 50),
+    premovesPlayed: mine.filter(p => p.client!.premove === 'played').length,
+    premovesRejected: mine.filter(p => p.client!.premove === 'rejected').length,
+    reviewOpened: session.reviewOpened,
+    drawerOpened: session.drawerOpened,
+    devices: { ...session.devices },
+    pointers: { ...session.pointers },
+    fx: { ...session.fx },
+  };
+}
+
+/**
  * Roll a finished game up.
  *
  * `checks` is passed in rather than derived here because the check flag lives in the SAN,
  * which is on the history entry rather than on the metric -- and duplicating the SAN into
  * the metric to avoid one argument would be the worse trade.
+ *
+ * `client` is optional for the same reason it is optional on the archive: a game where no
+ * browser reported anything should carry no client block at all, rather than a block of
+ * zeroes that reads as "nobody hesitated".
  */
 export function summariseGame(plies: PlyMetric[], durationMs: number,
                               checks: { white: number; black: number },
-                              winner: Color | 'draw' | null): GameMetrics {
+                              winner: Color | 'draw' | null,
+                              client?: { white: ClientSession; black: ClientSession },
+                             ): GameMetrics {
   const white = sideMetrics(plies, 'white');
   const black = sideMetrics(plies, 'black');
   white.checksGiven = checks.white;
@@ -251,11 +312,21 @@ export function summariseGame(plies: PlyMetric[], durationMs: number,
     if (winner === 'black' && m > 0) comeback = true;
   }
 
+  const reported = plies.some(p => p.client) || (client != null
+    && (client.white.reviewOpened + client.white.drawerOpened
+      + client.black.reviewOpened + client.black.drawerOpened) > 0);
+
   return {
     schema: METRICS_SCHEMA,
     plies,
     white,
     black,
+    client: reported && client
+      ? {
+        white: clientMetrics(plies, 'white', client.white),
+        black: clientMetrics(plies, 'black', client.black),
+      }
+      : undefined,
     durationMs,
     firstCapturePly: plies.find(p => p.captured != null)?.ply ?? null,
     firstCheckPly: plies.find(p => p.inCheck)?.ply ?? null,

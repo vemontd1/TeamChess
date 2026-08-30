@@ -113,12 +113,16 @@ export interface SaveInput {
   metrics?: GameMetrics;
 }
 
+/** What was written: the summary for listings, and the game itself for anything that
+ * has to read the measurements back. */
+export interface SavedGame { summary: GameSummary; game: ArchivedGame; }
+
 /**
- * Write one game out. Returns the summary, or null if it was not worth keeping or could
- * not be stored -- a failed archive write must never take a game down with it, so every
- * path here is caught and reported rather than thrown.
+ * Write one game out. Returns what was written, or null if it was not worth keeping or
+ * could not be stored -- a failed archive write must never take a game down with it, so
+ * every path here is caught and reported rather than thrown.
  */
-export function saveGame(input: SaveInput): GameSummary | null {
+export function saveGame(input: SaveInput): SavedGame | null {
   if (input.history.length === 0) return null;   // nothing happened; nothing to review
   if (!ready) initArchive();
 
@@ -141,7 +145,7 @@ export function saveGame(input: SaveInput): GameSummary | null {
   const summary = summarise(game);
   index.unshift(summary);
   if (index.length > MAX_INDEX) index.length = MAX_INDEX;
-  return summary;
+  return { summary, game };
 }
 
 export function listGames(limit = 40): GameSummary[] {
@@ -160,6 +164,38 @@ export function loadGame(id: string): ArchivedGame | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Every archived game on disk, one at a time.
+ *
+ * The in-memory index holds summaries only, and a summary has no metrics block in it, so
+ * anything that needs the measurements has to go back to the files. Handed to a callback
+ * rather than returned as an array because the whole archive does not have to be resident
+ * at once: a game with its per-ply record is tens of kilobytes, and the only caller folds
+ * each one into counters and forgets it.
+ *
+ * Order is whatever the directory gives; no caller here depends on it.
+ */
+export function eachArchivedGame(fn: (game: ArchivedGame) => void): number {
+  if (!ensureDir()) return 0;
+  let names: string[];
+  try {
+    names = fs.readdirSync(DIR).filter(n => n.endsWith('.json'));
+  } catch { return 0; }
+
+  let seen = 0;
+  for (const name of names) {
+    try {
+      const game = JSON.parse(fs.readFileSync(path.join(DIR, name), 'utf8')) as ArchivedGame;
+      if (!game?.id || !Array.isArray(game.history)) continue;
+      fn(game);
+      seen++;
+    } catch {
+      console.warn(`[archive] skipping unreadable ${name}`);
+    }
+  }
+  return seen;
 }
 
 /**

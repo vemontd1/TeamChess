@@ -18,6 +18,7 @@
  * The number that matters most is `open`: the share of turns where every legal move was
  * affordable anyway, i.e. where the cards were not a constraint at all.
  */
+import { pathToFileURL } from 'node:url';
 import { Chess } from 'chess.js';
 import {
   TUNING, createCards, drawCards, drawBonus, drawPerTurnFor, extinctTypes, replaceExtinct,
@@ -40,7 +41,11 @@ const SWAP = process.env.BALANCE_NO_SWAP !== '1';
 const GAMES = Number(process.env.GAMES ?? 120);
 const MAX_PLIES = Number(process.env.MAX_PLIES ?? 60);
 
-function simulate() {
+/**
+ * Play the games and return the rates. Exported so `test/guardrails.mjs` can hold the
+ * simulation to the targets in `docs/METRICS.md` without a second copy of this loop.
+ */
+export function simulate() {
   const s = {
     turns: 0, open: 0, moveCov: 0, typeCov: 0, emergency: 0, wild: 0,
     distinct: 0, handSize: 0, stuckToKing: 0, plies: 0, games: 0,
@@ -211,6 +216,14 @@ const CANDIDATES = [
   ['deal 1 cap 7, heavy', { deck: D.heavy, drawPerTurn: 1, enrageDrawPerTurn: 2 }],
 ];
 
+/**
+ * Only when run directly. Importing this file is how the guardrail check reaches
+ * `simulate`, and an import that prints a table is an import nobody wants.
+ */
+const RUN_CLI = process.argv[1]
+  && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (RUN_CLI) {
 console.log(`\nChess Cards balance — ${GAMES} games, up to ${MAX_PLIES} plies each`);
 console.log('\n  open  = turns where every legal move was affordable (the cards did nothing)');
 console.log('  moves = share of legal moves the hand could pay for');
@@ -234,3 +247,4 @@ if (shipped.late) {
     + `   emerg ${pct(L.emergency)}   swap ${pct(L.swapTurns)}   dead ${num(L.deadHeld)}`);
 }
 console.log();
+}

@@ -227,6 +227,18 @@ room setups people choose, accounts, live rooms, recent games (each opening in t
 and the bug reports with a done/reopen toggle. It is computed on demand from the archive
 rather than from a separate analytics stream, so there is nothing to keep in sync.
 
+Its **Metrics** tab is the measured game: every declared target from `docs/METRICS.md`
+graded against real play, distributions (not averages) of think time, wait time and game
+length, mode health across the opening, middle game and endgame, cards held against cards
+spent, the room funnel from created to played-again, and games per day. Every chart carries
+its own table, because colour is never the only way to read a number.
+
+That tab reads a rolling aggregate in `data/insights.json` rather than the archive: a
+game's per-ply record is the large part of its file, and a panel that reads all of them
+would get slower the more it had to say. The aggregate is a cache and never a source —
+**Rebuild from archive** at the foot of the tab recounts every game from the files, which
+is what makes it safe to change how something is counted.
+
 Access is decided by the server on every call from the session's account, so the page never
 asks whether it should be allowed to draw itself: it asks for data and draws what comes
 back.
@@ -242,9 +254,38 @@ It lives on the server and reaches the archive when the game ends, **never** in 
 broadcast to the room — every card field reconstructs a hand, and the room includes your
 opponent. A test asserts that.
 
+Your browser reports the other half — pieces picked up and put back down, cards chosen and
+unchosen, how long after a turn opened you first touched the board, whether a queued move
+survived, and what you are playing on. It goes over a small, rate-limited, **best-effort**
+channel: nothing is acknowledged, nothing is retried, every number is clamped on arrival,
+and no rule anywhere reads it. A client can lie, so it is treated as a report rather than
+a fact.
+
 The same module computes the numbers for `npm run balance`, so the simulation we tune
 against and real play are finally the same measurement rather than two that resemble each
-other. `docs/METRICS.md` is the full taxonomy and what is still to come.
+other. `npm run guardrails` holds that simulation to the targets in `docs/METRICS.md` and
+fails when it drifts outside them — the same target list the admin panel grades real play
+against, so a tuning change cannot pass in one place and fail in the other.
+
+`docs/METRICS.md` is the full taxonomy and what is still to come.
+
+## Your own report
+
+Every finished game has a **Report** beside its replay — from the end-of-game card, or from
+any game on your profile. Your think time against your opponent's, how much of the board
+your hand could actually pay for, the material graph from your side of it, the cards you
+held against the ones you spent, and the moves where material was left where it could be
+taken.
+
+It compares rather than grades. There is no score and no advice about what you should have
+played, and every number that cannot be trusted completely says so next to itself: the
+hanging check looks one ply ahead and does not search the recapture, so a piece you meant
+to trade appears there too. The profile adds the trend — think time and hang rate over your
+last thirty measured games, which is the one question a list of results cannot answer.
+
+Mid-game you are told exactly one thing: **"4 of 11 legal moves your hand can pay for"**,
+under the hand, on your turn, in Chess Cards. That is the question the mode actually poses.
+Anything more would be a second game played against the HUD.
 
 ## Stepping back through a game
 
@@ -391,11 +432,16 @@ deploy; the same build/start pair works on any Node host.
 
 ```bash
 npm run balance      # simulate Chess Cards games and measure how much the cards bite
-npm run test:unit    # the card engine, no server needed
+npm run guardrails   # hold that simulation to the targets in docs/METRICS.md
+npm run test:unit    # the card engine and the insights aggregate, no server needed
 
 npm start            # in one shell
-npm test             # in another: unit tests, then the socket suite
+npm test             # in another: unit tests, guardrails, then the socket suite
 ```
+
+`npm run preview:metrics` renders the admin panel's Metrics tab from simulated play to
+`preview/metrics.html`, which opens in a browser with nothing running. It is how a chart
+can be looked at before there are enough real games to fill one.
 
 `test/integration.mjs` drives real socket clients through the whole game: rotation order,
 turn enforcement, timeout auto-moves, rotation past a timed-out seat, takeback accept/decline

@@ -293,6 +293,15 @@ export interface ProfileGame extends GameSummary {
   yourColor: Color;
   yourResult: 'win' | 'loss' | 'draw';
   opponents: string[];
+  /**
+   * How that side measured, kept with the game rather than looked up from the archive.
+   *
+   * The profile is the one place a trend can be drawn -- think time over a season, a hang
+   * rate that is or is not coming down -- and a trend cannot be built from a list of
+   * results. Absent on games played before metrics existed, and on games where the
+   * archive write failed, so every reader treats it as optional.
+   */
+  you?: SideMetrics;
 }
 
 export interface ProfileView {
@@ -317,6 +326,62 @@ export interface ProfileView {
  * broadcast to the whole room including spectators. These reach a client only once the
  * game is over and there is nothing left to protect.
  */
+// --- what only the client can see ---
+
+/**
+ * The browser, reported once per session.
+ *
+ * Advisory, all of it. A client can send whatever it likes here, so nothing that decides
+ * a rule may read it -- it exists to answer questions the server cannot even ask, like
+ * whether the phone layout is ever used and whether the people using it are the ones
+ * timing out.
+ */
+export interface ClientInfo {
+  device: 'phone' | 'tablet' | 'desktop';
+  pointer: 'touch' | 'mouse' | 'pen';
+  /** "390x844". */
+  viewport: string;
+  fx: 'full' | 'calm' | 'off';
+}
+
+/**
+ * One turn, as the browser saw it.
+ *
+ * `pickups` and `cardSelections` are the interesting pair: they are hesitation, which the
+ * server cannot see at all. A player who picks three pieces up and puts them all down is
+ * having a different turn from one who moves instantly, and `thinkMs` reads the same for
+ * both.
+ */
+export interface ClientPly {
+  /** Pieces picked up and put down again before committing to a move. */
+  pickups: number;
+  /** Cards picked and unpicked before the move. */
+  cardSelections: number;
+  /** Turn opening to the first interaction with the board, against `thinkMs`. */
+  timeToFirstTouchMs: number | null;
+  /** Whether this move came out of the premove queue, and whether one was refused. */
+  premove: 'none' | 'played' | 'rejected';
+}
+
+/** A side's turns as its browsers saw them, rolled up over the game. */
+export interface ClientSideMetrics {
+  /** Plies that carried a client report at all. Never more than `moves`. */
+  plies: number;
+  pickups: number;
+  cardSelections: number;
+  /** Median, in milliseconds, over the plies that reported one. */
+  firstTouchMs: number;
+  premovesPlayed: number;
+  premovesRejected: number;
+  /** Times the game was stepped back through, and the phone drawer opened. */
+  reviewOpened: number;
+  drawerOpened: number;
+  /** Device classes seen on this side, by how many turns each played. */
+  devices: Record<string, number>;
+  pointers: Record<string, number>;
+  fx: Record<string, number>;
+}
+
 export interface PlyCards {
   handSize: number;
   handCap: number;
@@ -379,6 +444,8 @@ export interface PlyMetric {
   clockFraction: number | null;
 
   cards?: PlyCards;
+  /** What the browser reported for this turn, if it reported anything. Advisory. */
+  client?: ClientPly;
 }
 
 /** One side's game, rolled up from its plies. */
@@ -423,6 +490,158 @@ export interface GameMetrics {
   maxLead: number;
   /** The winner was behind at some point. */
   comeback: boolean;
+  /**
+   * What the browsers reported, per side.
+   *
+   * Absent for a game where nobody reported anything -- an old game, a client with the
+   * channel switched off, or a room played entirely by bots.
+   */
+  client?: { white: ClientSideMetrics; black: ClientSideMetrics };
+}
+
+// --- insights: the archive, rolled up ---
+
+/**
+ * A histogram, and the few numbers worth deriving from one.
+ *
+ * Distributions rather than averages, because an average think time of twelve seconds
+ * hides both the player who moves instantly and the one who times out, and those are two
+ * different problems. The buckets are fixed so that a rolling aggregate can keep counting
+ * into them without holding a single sample.
+ */
+export interface Distribution {
+  /** Upper bound of every bucket but the last, which is open-ended. */
+  bounds: number[];
+  counts: number[];
+  n: number;
+  mean: number;
+  p50: number;
+  p90: number;
+  max: number;
+  unit: 'ms' | 'plies';
+}
+
+export type Phase = 'early' | 'middle' | 'late';
+
+/** The same mode-health numbers, split by where in the game they were measured. */
+export interface PhaseInsights {
+  phase: Phase;
+  plies: number;
+  openTurnRate: number;
+  affordableRatio: number;
+  emergencyRate: number;
+  hangRate: number;
+  autoRate: number;
+}
+
+/** One mode, across every measured game of it. Rates are per ply unless said otherwise. */
+export interface ModeInsights {
+  mode: GameMode;
+  /** Games with a metrics block. Games archived before metrics existed are not here. */
+  games: number;
+  plies: number;
+  openTurnRate: number;
+  affordableRatio: number;
+  onlyKingRate: number;
+  forcedRate: number;
+  checkRate: number;
+  captureRate: number;
+  hangRate: number;
+  missedMean: number;
+  /** The clock played it: a timeout, counted against moves. */
+  autoRate: number;
+  botRate: number;
+  emergencyRate: number;
+  sacrificesPerGame: number;
+  deadHeldMean: number;
+  atCapRate: number;
+  cyclesPerGame: number;
+  replacementsPerGame: number;
+  /** Card kinds held, summed over every ply -- what players actually saw. */
+  drawnKinds: Record<string, number>;
+  spentKinds: Record<string, number>;
+  results: Record<string, number>;
+  reasons: Record<string, number>;
+  /** Games that ended with everyone gone, as a share of measured games. */
+  abandonRate: number;
+  comebackRate: number;
+  leadChangesMean: number;
+  /**
+   * The browser half, over the plies that reported one.
+   *
+   * Kept apart from everything above because it is a different kind of evidence: the
+   * server measured the rest, and a client reported this. `clientPlies` is how much of
+   * the mode it actually covers -- read a rate against `plies` and it will look like
+   * nobody ever hesitated.
+   */
+  clientPlies: number;
+  pickupsPerPly: number;
+  cardSelectionsPerPly: number;
+  premovesPlayed: number;
+  premovesRejected: number;
+  reviewOpens: number;
+  drawerOpens: number;
+  devices: Record<string, number>;
+  pointers: Record<string, number>;
+  fx: Record<string, number>;
+  firstTouch: Distribution;
+  phases: PhaseInsights[];
+  think: Distribution;
+  wait: Distribution;
+  /** Plies per game. */
+  length: Distribution;
+  /** Time actually spent at the board, per game. */
+  duration: Distribution;
+}
+
+/**
+ * The room funnel: where people fall out before a game ever happens.
+ *
+ * Counted live, per room, each step at most once -- these cannot be recovered from the
+ * archive, because a room that was never started leaves nothing behind. A rebuild
+ * therefore keeps them rather than recomputing them.
+ */
+export interface FunnelInsights {
+  created: number;
+  seated: number;
+  started: number;
+  firstMove: number;
+  finished: number;
+  rematch: number;
+}
+
+/**
+ * One declared target, and where we actually sit against it.
+ *
+ * A metric with no target is a number nobody can act on. `info` means the doc declares a
+ * direction rather than a range; `unknown` means there is not yet enough play to say.
+ */
+export interface GuardrailRow {
+  key: string;
+  label: string;
+  scope: GameMode | 'all';
+  value: number | null;
+  unit: 'pct' | 'ms' | 'ratio';
+  min: number | null;
+  max: number | null;
+  /** The target as it should be printed, e.g. "10–20%". */
+  target: string;
+  status: 'good' | 'watch' | 'off' | 'info' | 'unknown';
+  /** How many plies or games the value rests on. */
+  samples: number;
+  why: string;
+}
+
+export interface Insights {
+  schema: number;
+  updatedAt: number;
+  /** Archived games folded in, and archived games that carried no metrics block. */
+  gamesCovered: number;
+  gamesUnmeasured: number;
+  modes: ModeInsights[];
+  daily: Array<{ day: string; games: number; plies: number }>;
+  funnel: FunnelInsights;
+  guardrails: GuardrailRow[];
 }
 
 // --- bug reports ---

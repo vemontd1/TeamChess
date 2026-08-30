@@ -16,6 +16,9 @@ import { handView, canSacrifice, sacrificeReadyIn, canCastle, TUNING } from './c
 import { summariseGame } from './metrics.js';
 import { initArchive, saveGame, listGames, loadGame, toPgn } from './archive.js';
 import {
+  initInsights, insightsView, foldGame, noteFunnel, rebuildInsights,
+} from './insights.js';
+import {
   initProfiles, touchProfile, recordGame, profileView, profileCount,
 } from './profiles.js';
 import {
@@ -30,7 +33,7 @@ import type {
   MovePayload, TakebackRespondPayload, DrawRespondPayload, JoinResult, You,
   ChatSendPayload, MarkTogglePayload, GameResult, GameSummary, GameMetrics, ProfileView,
   Account, AuthPayload, AuthResult, SessionPayload,
-  BugReport, ReportPayload, AdminOverview,
+  BugReport, ReportPayload, AdminOverview, Insights, ClientInfo,
 } from './types.js';
 
 const TAKEBACK_WINDOW_MS = 20_000;
@@ -40,6 +43,25 @@ const DRAW_WINDOW_MS = 20_000;
 // token bucket: a burst of six is fine, sustained is one every two seconds.
 const CHAT_BURST = 6;
 const CHAT_REFILL_MS = 2_000;
+
+/**
+ * Telemetry is chattier than chat and worth a great deal less, so it gets a bucket of its
+ * own: a burst that covers an opening flurry of turns, refilling at about one a second.
+ * Over budget is dropped, never queued and never answered -- the channel is advisory, and
+ * a client that floods it should lose packets rather than get a reply worth retrying.
+ */
+const TELEMETRY_BURST = 20;
+const TELEMETRY_REFILL_MS = 1_000;
+
+/** What a client reports about the turn it just took. Every field is clamped on arrival. */
+interface TelemetryTurnPayload {
+  gameSeq: number;
+  ply: number;
+  pickups?: number;
+  cardSelections?: number;
+  timeToFirstTouchMs?: number | null;
+  premove?: 'none' | 'played' | 'rejected';
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -88,7 +110,7 @@ function archiveUnfinished(room: Room): void {
 }
 
 function finishGame(room: Room, result: GameResult, reason: string): void {
-  const summary = saveGame({
+  const saved = saveGame({
     roomId: room.id,
     config: room.config,
     white: rosterOf(room, 'white'),
@@ -100,10 +122,16 @@ function finishGame(room: Room, result: GameResult, reason: string): void {
     reason,
     metrics: gameMetricsFor(room, result),
   });
-  if (!summary) return;
+  if (!saved) return;
 
-  creditPlayers(room, summary);
-  io.to(room.id).emit('game:archived', summary);
+  if (!room.funnel.finished) { room.funnel.finished = true; noteFunnel('finished'); }
+  // Folded here rather than inside the archive, so that writing a game and counting it
+  // stay one step apart: a game that could not be written is not counted either.
+  try { foldGame(saved.game); }
+  catch (err) { console.warn('[insights] could not fold a game:', (err as Error).message); }
+
+  creditPlayers(room, saved.summary, saved.game.metrics);
+  io.to(room.id).emit('game:archived', saved.summary);
 }
 
 /**
@@ -125,7 +153,7 @@ function gameMetricsFor(room: Room, result: GameResult): GameMetrics | undefined
 
   const winner = result === 'white' || result === 'black' ? result
     : result === 'draw' ? 'draw' : null;
-  return summariseGame(room.plyMetrics, durationMs, checks, winner);
+  return summariseGame(room.plyMetrics, durationMs, checks, winner, room.clientSessions);
 }
 
 /**
@@ -135,12 +163,16 @@ function gameMetricsFor(room: Room, result: GameResult): GameMetrics | undefined
  * against. That is the whole reason accounts exist, and it is why the home screen says so
  * rather than silently keeping nothing.
  */
-function creditPlayers(room: Room, summary: GameSummary): void {
+function creditPlayers(room: Room, summary: GameSummary,
+                       metrics: GameMetrics | undefined): void {
   for (const color of ['white', 'black'] as Color[]) {
     for (const seat of teamFor(room, color).seats) {
       if (!seat.accountId) continue;
       try {
-        recordGame(seat.accountId, seat.name ?? 'Player', summary, color);
+        // The side roll-up travels with the game onto the profile, because a trend over a
+        // season cannot be rebuilt from a list of results -- and the archive is capped,
+        // so it cannot be looked up later either.
+        recordGame(seat.accountId, seat.name ?? 'Player', summary, color, metrics?.[color]);
       } catch (err) {
         console.warn('[profiles] could not record a game:', (err as Error).message);
       }
@@ -208,8 +240,41 @@ function adminOverview(): AdminOverview {
   };
 }
 
+/**
+ * A room reaching a funnel step.
+ *
+ * Read off the room rather than hooked to the handlers that cause it, because there is
+ * more than one way to reach each: a side is manned by a person sitting down or by the
+ * host adding a bot, and a first move can be made by a player, a bot or the clock. The
+ * flags make every step count once per room, so this can be asked on every broadcast.
+ */
+function noteProgress(room: Room): void {
+  if (!room.funnel.seated && canStart(room)) {
+    room.funnel.seated = true;
+    noteFunnel('seated');
+  }
+  if (!room.funnel.firstMove && room.history.length > 0) {
+    room.funnel.firstMove = true;
+    noteFunnel('firstMove');
+  }
+}
+
+/** A room starting a game, and a room starting another one. Each counted once. */
+function noteStart(room: Room): void {
+  if (!room.funnel.started) {
+    room.funnel.started = true;
+    noteFunnel('started');
+    return;
+  }
+  if (!room.funnel.rematch) {
+    room.funnel.rematch = true;
+    noteFunnel('rematch');
+  }
+}
+
 function broadcast(room: Room): void {
   archiveIfFinished(room);
+  noteProgress(room);
   io.to(room.id).emit('room:state', serialize(room));
   void pushMarks(room);
   void pushHands(room);
@@ -338,6 +403,9 @@ interface SockData {
   /** The signed-in account on this socket, if any. Guests leave it undefined. */
   account?: Account;
   chatTokens?: number; chatAt?: number;
+  /** The browser on the other end of this socket, as it described itself. Advisory. */
+  client?: ClientInfo;
+  telTokens?: number; telAt?: number;
   /** Failed sign-in attempts on this socket, for the rate limit below. */
   authTries?: number; authAt?: number;
 }
@@ -357,6 +425,7 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('room:create', (payload: CreatePayload, cb?: (roomId: string) => void) => {
     const room = createRoom(sanitizeConfig(payload?.config));
+    noteFunnel('created');
     cb?.(room.id);
   });
 
@@ -505,6 +574,7 @@ io.on('connection', (socket: Socket) => {
   socket.on('game:start', () => {
     const room = roomOf();
     if (!room || !isHost(room) || room.status === 'playing' || !canStart(room)) return;
+    noteStart(room);
     resetGame(room, 'playing');
     armTurn(room, hooks);
     io.to(room.id).emit('game:start');
@@ -514,6 +584,7 @@ io.on('connection', (socket: Socket) => {
   socket.on('game:rematch', () => {
     const room = roomOf();
     if (!room || !isHost(room) || !canStart(room)) return;
+    noteStart(room);
     resetGame(room, 'playing');
     armTurn(room, hooks);
     io.to(room.id).emit('game:start');
@@ -659,6 +730,25 @@ io.on('connection', (socket: Socket) => {
     cb?.(asAdmin() ? adminOverview() : null);
   });
 
+  socket.on('admin:insights', (_payload: unknown,
+                              cb?: (res: Insights | null) => void) => {
+    cb?.(asAdmin() ? insightsView() : null);
+  });
+
+  /**
+   * Recompute from the archive.
+   *
+   * The aggregate is a cache, so there is always a way back to the games themselves --
+   * which is what makes it safe to change how something is counted and then ask for the
+   * old games to be counted the new way.
+   */
+  socket.on('admin:insights-rebuild', (_payload: unknown,
+                                       cb?: (res: Insights | null) => void) => {
+    if (!asAdmin()) { cb?.(null); return; }
+    rebuildInsights();
+    cb?.(insightsView());
+  });
+
   socket.on('admin:reports', (payload: { limit?: number } | undefined,
                               cb?: (res: BugReport[] | null) => void) => {
     if (!asAdmin()) { cb?.(null); return; }
@@ -689,6 +779,103 @@ io.on('connection', (socket: Socket) => {
     });
 
   // ---- team coordination: chat and marks, both team-scoped ----
+
+  // ---- telemetry ----
+
+  /**
+   * What the browser saw.
+   *
+   * Best-effort in both directions: no acknowledgement goes back, and a packet that is
+   * malformed, late, out of budget or about somebody else's ply is dropped in silence. A
+   * dropped telemetry packet must never affect a game, and a client that gets this wrong
+   * must never be able to tell that it did.
+   *
+   * Every number is clamped rather than trusted. These come from the one place in the
+   * system that is not ours, and they end up in an aggregate that is read as evidence.
+   */
+  const telemetryBudget = (): boolean => {
+    const now = Date.now();
+    const since = now - (data.telAt ?? 0);
+    data.telTokens = Math.min(TELEMETRY_BURST,
+      (data.telTokens ?? TELEMETRY_BURST) + since / TELEMETRY_REFILL_MS);
+    data.telAt = now;
+    if (data.telTokens < 1) return false;
+    data.telTokens -= 1;
+    return true;
+  };
+
+  const clamp = (n: unknown, max: number): number => {
+    const v = Math.floor(Number(n));
+    return Number.isFinite(v) && v > 0 ? Math.min(v, max) : 0;
+  };
+
+  socket.on('telemetry:client', (payload: ClientInfo | undefined) => {
+    if (!payload || !telemetryBudget()) return;
+    const device = payload.device;
+    const pointer = payload.pointer;
+    const fx = payload.fx;
+    data.client = {
+      device: device === 'phone' || device === 'tablet' ? device : 'desktop',
+      pointer: pointer === 'touch' || pointer === 'pen' ? pointer : 'mouse',
+      viewport: String(payload.viewport ?? '').slice(0, 16),
+      fx: fx === 'calm' || fx === 'off' ? fx : 'full',
+    };
+  });
+
+  /**
+   * One turn, reported by the player who took it.
+   *
+   * Matched to the ply it claims rather than to the last one recorded: a packet that
+   * arrives after the next move has been played still belongs to its own turn, and one
+   * that names a ply this seat did not play belongs nowhere.
+   */
+  socket.on('telemetry:turn', (payload: TelemetryTurnPayload | undefined) => {
+    const room = roomOf();
+    const token = data.token;
+    if (!room || !token || !payload || !telemetryBudget()) return;
+    if (payload.gameSeq !== room.gameSeq) return;
+
+    const seat = seatByToken(room, token);
+    if (!seat) return;
+
+    const row = room.plyMetrics.find(
+      p => p.ply === payload.ply && p.color === seat.color && p.seatId === seat.seat.id);
+    if (!row || row.client) return;      // unknown ply, or already reported once
+
+    const premove = payload.premove;
+    row.client = {
+      pickups: clamp(payload.pickups, 99),
+      cardSelections: clamp(payload.cardSelections, 99),
+      timeToFirstTouchMs: payload.timeToFirstTouchMs == null ? null
+        : clamp(payload.timeToFirstTouchMs, 10 * 60_000),
+      premove: premove === 'played' || premove === 'rejected' ? premove : 'none',
+    };
+
+    const session = room.clientSessions[seat.color];
+    if (data.client) {
+      session.devices[data.client.device] = (session.devices[data.client.device] ?? 0) + 1;
+      session.pointers[data.client.pointer] =
+        (session.pointers[data.client.pointer] ?? 0) + 1;
+      session.fx[data.client.fx] = (session.fx[data.client.fx] ?? 0) + 1;
+    }
+  });
+
+  /**
+   * Something that is not a turn: the review opened, the phone drawer pulled out.
+   *
+   * Counted per side rather than per ply, because neither belongs to one -- a player who
+   * steps back through the game is not doing it on any particular move.
+   */
+  socket.on('telemetry:event', (payload: { kind?: string } | undefined) => {
+    const room = roomOf();
+    const token = data.token;
+    if (!room || !token || !payload || !telemetryBudget()) return;
+    const seat = seatByToken(room, token);
+    if (!seat) return;
+    const session = room.clientSessions[seat.color];
+    if (payload.kind === 'review') session.reviewOpened++;
+    else if (payload.kind === 'drawer') session.drawerOpened++;
+  });
 
   socket.on('chat:send', (payload: ChatSendPayload) => {
     const room = roomOf();
@@ -966,6 +1153,7 @@ if (fs.existsSync(clientDist)) {
 }
 
 initArchive();
+initInsights();
 initProfiles();
 initAccounts();
 initReports();
