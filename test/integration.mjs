@@ -670,7 +670,12 @@ async function main() {
 
     const g = new Chess(st.fen);
     const r = reach(hand);
-    const options = g.moves({ verbose: true }).filter(m => r.has(m.piece));
+    // Castling is the one king move that is not free -- the rook travels too, and it
+    // costs a Rook card -- so the harness may only offer it when the hand can pay. Left
+    // in, it would occasionally pick a castle the server was right to refuse and report
+    // the refusal as a failure.
+    const options = g.moves({ verbose: true }).filter(m => r.has(m.piece))
+      .filter(m => hand.canCastle !== false || !/^O-O/.test(m.san));
     if (options.length === 0) { bad = `${color} could not move at all`; break; }
 
     // Prefer a capture where one exists, to exercise the tempo bonus; otherwise pick at
@@ -698,11 +703,23 @@ async function main() {
     }
     if (pick.captured && cw.last.status === 'playing') {
       capturesSeen++;
-      // one card paid for the move, one came back for the capture
-      const expected = Math.min(after.handCap,
-        before.hand - (pick.piece === 'k' ? 0 : 1) + 1);
-      if (after.handCount !== expected) {
-        bad = `a capture left ${after.handCount} cards, expected ${expected}`; break;
+      // One card paid for the move and one came back for the capture -- except on a turn
+      // the emergency net opened, where the hand was empty of anything playable and the
+      // arithmetic of "one out, one in" does not describe what happened. There the
+      // invariant is the one that always holds: never over the cap, never up by more
+      // than the tempo card.
+      if (hand.emergency) {
+        if (after.handCount > after.handCap || after.handCount - before.hand > 1) {
+          bad = `an emergency capture left ${after.handCount} cards `
+            + `(cap ${after.handCap}, before ${before.hand})`;
+          break;
+        }
+      } else {
+        const expected = Math.min(after.handCap,
+          before.hand - (pick.piece === 'k' ? 0 : 1) + 1);
+        if (after.handCount !== expected) {
+          bad = `a capture left ${after.handCount} cards, expected ${expected}`; break;
+        }
       }
     }
   }
@@ -1895,6 +1912,7 @@ async function main() {
         reopened?.resolved === false && (reopened.attachments?.length ?? 0) === 0,
         JSON.stringify(reopened?.attachments));
       check('but the report itself survives', reopened.text.includes('scrolls instead'));
+
     }
   }
 

@@ -45,6 +45,31 @@ function attachmentDir(reportId: string): string {
 const index: BugReport[] = [];
 let ready = false;
 
+/**
+ * Screenshots belonging to a report that does not exist.
+ *
+ * They can only be left by a crash between the two writes that file a report -- which has
+ * happened exactly once, to a deploy landing mid-submission -- but a folder of somebody's
+ * screen with nothing to explain it is the last thing this store should hold on to. Swept
+ * at startup, where the full list of reports is already in hand.
+ */
+function sweepOrphanAttachments(): void {
+  const root = path.join(DIR, 'attachments');
+  let dirs: string[];
+  try {
+    dirs = fs.readdirSync(root);
+  } catch { return; }
+
+  const known = new Set(index.map(r => r.id));
+  for (const dir of dirs) {
+    if (known.has(dir)) continue;
+    try {
+      fs.rmSync(path.join(root, dir), { recursive: true, force: true });
+      console.log(`[reports] swept orphaned attachments for ${dir}`);
+    } catch { /* a folder that will not go is not worth failing a start over */ }
+  }
+}
+
 function ensureDir(): boolean {
   try {
     fs.mkdirSync(DIR, { recursive: true });
@@ -74,6 +99,7 @@ export function initReports(): void {
   }
   index.sort((a, b) => b.at - a.at);
   if (index.length > MAX_INDEX) index.length = MAX_INDEX;
+  sweepOrphanAttachments();
   console.log(`[reports] ${index.length} report(s) in ${DIR}`);
 }
 
@@ -252,13 +278,31 @@ export function fileReport(input: FileReportInput): BugReport | null {
     reporter: input.reporter.slice(0, 24),
     accountId: input.accountId,
     context: cleanContext(input.context),
-    attachments: Array.isArray(input.attachments)
-      ? writeAttachments(id, input.attachments as Array<{ name?: string; dataUrl?: string }>)
-      : [],
+    attachments: [],
     resolved: false,
   };
 
-  if (!write(report)) { dropAttachments(report); return null; }
+  /*
+   * The sentence lands first, the pictures after.
+   *
+   * It used to be the other way round -- attachments written into the report object, then
+   * the whole thing saved -- and one report was lost to the gap: the images reached the
+   * volume, the container was replaced mid-deploy, and the file that carried the text was
+   * never written. What was left was a folder of screenshots belonging to a report nobody
+   * could read.
+   *
+   * Written in this order, the worst a crash can now cost is the pictures on a report
+   * that still says what was wrong, which is the half worth keeping.
+   */
+  if (!write(report)) return null;
+
+  if (Array.isArray(input.attachments) && input.attachments.length > 0) {
+    report.attachments = writeAttachments(
+      id, input.attachments as Array<{ name?: string; dataUrl?: string }>);
+    // A failure here leaves the report as it was saved a moment ago: text, no images.
+    if (report.attachments.length > 0 && !write(report)) dropAttachments(report);
+  }
+
   index.unshift(report);
   if (index.length > MAX_INDEX) index.length = MAX_INDEX;
   return report;
